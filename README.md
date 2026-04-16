@@ -13,14 +13,7 @@ Orbit Duel is a local 1v1 arena game built with HTML, CSS, and JavaScript.
 
 ## How To Run
 
-Open `index.html` in a web browser, or run a local server:
-
-```powershell
-npm install
-npm start
-```
-
-Then open http://localhost:3000 in your browser.
+Open https://sir0reo.github.io/Orbit-Duel/ in your browser
 
 ## Tech Stack
 
