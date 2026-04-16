@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orbit Duel</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="game-container">
+        <!-- UI Layer -->
+        <div id="ui-layer">
+            <div id="player1-ui" class="player-ui">
+                <div class="player-name p1">PLAYER 1</div>
+                <div class="health-bar-container">
+                    <div id="p1-health" class="health-bar p1"></div>
+                    <div id="p1-health-text" class="health-text">1000/1000</div>
+                </div>
+                <div class="cooldowns">
+                    <div class="cooldown-item">
+                        <span class="key">E</span> DASH
+                        <div class="cooldown-bar-bg"><div id="p1-dash-cd" class="cooldown-bar"></div></div>
+                    </div>
+                    <div class="cooldown-item">
+                        <span class="key">R</span> SHOOT
+                        <div class="cooldown-bar-bg"><div id="p1-shoot-cd" class="cooldown-bar"></div></div>
+                    </div>
+                    <div class="cooldown-item">
+                        <span class="key">F</span> ABILITY
+                        <div class="cooldown-bar-bg"><div id="p1-special-cd" class="cooldown-bar"></div></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="player2-ui" class="player-ui">
+                <div class="player-name p2">PLAYER 2</div>
+                <div class="health-bar-container">
+                    <div id="p2-health" class="health-bar p2"></div>
+                    <div id="p2-health-text" class="health-text">1000/1000</div>
+                </div>
+                <div class="cooldowns">
+                    <div class="cooldown-item">
+                        <span class="key">O</span> DASH
+                        <div class="cooldown-bar-bg"><div id="p2-dash-cd" class="cooldown-bar"></div></div>
+                    </div>
+                    <div class="cooldown-item">
+                        <span class="key">P</span> SHOOT
+                        <div class="cooldown-bar-bg"><div id="p2-shoot-cd" class="cooldown-bar"></div></div>
+                    </div>
+                    <div class="cooldown-item">
+                        <span class="key">L</span> ABILITY
+                        <div class="cooldown-bar-bg"><div id="p2-special-cd" class="cooldown-bar"></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Canvas -->
+        <canvas id="gameCanvas"></canvas>
+
+        <!-- Screens -->
+        <div id="menu-screen" class="overlay">
+            <div class="menu-card">
+                <div class="menu-title">CHOOSE YOUR BUILDS</div>
+                <div class="menu-subtitle">Pick a build for each player, then start the round.</div>
+
+                <div class="menu-layout">
+                    <div class="menu-left">
+                        <div class="menu-grid">
+                            <div class="menu-col">
+                                <div class="menu-col-title p1">PLAYER 1</div>
+                                <div class="menu-options" data-player="1">
+                                    <button class="menu-option p1 selected" data-build="gunner" type="button">GUNNER</button>
+                                    <button class="menu-option p1" data-build="railgun" type="button">RAILGUN</button>
+                                    <button class="menu-option p1" data-build="swordsman" type="button">SWORDSMAN</button>
+                                    <button class="menu-option p1" data-build="archer" type="button">ARCHER</button>
+                                    <button class="menu-option p1" data-build="ninja" type="button">NINJA</button>
+                                    <button class="menu-option p1" data-build="reaper" type="button">REAPER</button>
+                                    <button class="menu-option p1" data-build="shotgun" type="button">SHOTGUN</button>
+                                    <button class="menu-option p1" data-build="pyro" type="button">PYRO</button>
+                                    <button class="menu-option p1" data-build="necromancer" type="button">NECROMANCER</button>
+                                    <button class="menu-option p1" data-build="juggernaut" type="button">JUGGERNAUT</button>
+                                </div>
+                            </div>
+
+                            <div class="menu-col">
+                                <div class="menu-col-title p2">PLAYER 2</div>
+                                <div class="menu-options" data-player="2">
+                                    <button class="menu-option p2 selected" data-build="gunner" type="button">GUNNER</button>
+                                    <button class="menu-option p2" data-build="railgun" type="button">RAILGUN</button>
+                                    <button class="menu-option p2" data-build="swordsman" type="button">SWORDSMAN</button>
+                                    <button class="menu-option p2" data-build="archer" type="button">ARCHER</button>
+                                    <button class="menu-option p2" data-build="ninja" type="button">NINJA</button>
+                                    <button class="menu-option p2" data-build="reaper" type="button">REAPER</button>
+                                    <button class="menu-option p2" data-build="shotgun" type="button">SHOTGUN</button>
+                                    <button class="menu-option p2" data-build="pyro" type="button">PYRO</button>
+                                    <button class="menu-option p2" data-build="necromancer" type="button">NECROMANCER</button>
+                                    <button class="menu-option p2" data-build="juggernaut" type="button">JUGGERNAUT</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="menu-right">
+                        <div id="build-hover-card" class="build-hover-card hidden">
+                            <div id="build-hover-name" class="build-hover-name">BUILD</div>
+                            <div id="build-hover-desc" class="build-hover-desc"></div>
+                            <div id="build-hover-stats" class="build-hover-stats"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="menu-actions">
+                    <button id="start-round-btn" class="menu-primary" type="button">START ROUND</button>
+                </div>
+                <div class="menu-hint">
+                    P1: Dash <span class="key">E</span> • Shoot <span class="key">R</span> • Ability <span class="key">F</span><br>
+                    P2: Dash <span class="key">O</span> • Shoot <span class="key">P</span> • Ability <span class="key">L</span>
+                </div>
+            </div>
+        </div>
+
+        <div id="game-over-screen" class="hidden overlay">
+            <h1 id="winner-text">PLAYER 1 WINS!</h1>
+            <button id="rematch-btn">REMATCH</button>
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>

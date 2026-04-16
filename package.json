@@ -1,0 +1,8 @@
+{
+  "name": "orbit-duel",
+  "version": "1.0.0",
+  "description": "Orbit Duel local arena game",
+  "scripts": {
+    "start": "npx http-server -p 3000"
+  }
+}
