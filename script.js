@@ -17,8 +17,19 @@ const p2SpecialCd = document.getElementById('p2-special-cd');
 const gameOverScreen = document.getElementById('game-over-screen');
 const winnerText = document.getElementById('winner-text');
 const rematchBtn = document.getElementById('rematch-btn');
+const player1Name = document.getElementById('player1-name');
+const player2Name = document.getElementById('player2-name');
+const titleScreen = document.getElementById('title-screen');
+const localGameBtn = document.getElementById('local-game-btn');
+const onlineGameBtn = document.getElementById('online-game-btn');
+const botsGameBtn = document.getElementById('bots-game-btn');
 const menuScreen = document.getElementById('menu-screen');
+const menuSubtitle = document.getElementById('menu-subtitle');
+const botSettings = document.getElementById('bot-settings');
+const menuPlayer1Title = document.getElementById('menu-player1-title');
+const menuPlayer2Title = document.getElementById('menu-player2-title');
 const startRoundBtn = document.getElementById('start-round-btn');
+const menuHint = document.getElementById('menu-hint');
 const buildHoverCard = document.getElementById('build-hover-card');
 const buildHoverName = document.getElementById('build-hover-name');
 const buildHoverDesc = document.getElementById('build-hover-desc');
@@ -234,7 +245,7 @@ const BUILDS = {
         orbSpeedMult: 0.52,
         cloneCount: 2,
         cloneHp: 1,
-        orbTurnRate: 0.018,
+        orbTurnRate: 0.009,
     },
     juggernaut: {
         name: 'Juggernaut',
@@ -260,12 +271,71 @@ let screenShake = { x: 0, y: 0, duration: 0, intensity: 0 };
 const keys = {};
 let inMenu = true;
 let selectedBuilds = { 1: 'gunner', 2: 'gunner' };
+let currentGameMode = 'local';
+let botDifficulty = 'normal';
 let gameSpeedScale = 1.0;
 let summons = [];
 let collisionDamageCooldown = 0;
+let roundEndActive = false;
+let koRevealTimeout = null;
+let rematchRevealTimeout = null;
 const secretCheatState = {
     '.': [],
     ',': [],
+};
+
+const BOT_DIFFICULTY_CONFIG = {
+    easy: {
+        decisionMin: 0.24,
+        decisionMax: 0.38,
+        shootTolerance: 0.28,
+        specialTolerance: 0.24,
+        dangerDistance: 160,
+        projectileDangerDistance: 150,
+        dashChance: 0.38,
+        specialChance: 0.5,
+        shotChance: 0.62,
+        closeRange: 170,
+        mediumRange: 280,
+        gunnerHoldMin: 0.18,
+        gunnerHoldMax: 0.42,
+        archerStageMin: 1,
+        archerStageMax: 2,
+    },
+    normal: {
+        decisionMin: 0.12,
+        decisionMax: 0.22,
+        shootTolerance: 0.18,
+        specialTolerance: 0.16,
+        dangerDistance: 190,
+        projectileDangerDistance: 180,
+        dashChance: 0.65,
+        specialChance: 0.76,
+        shotChance: 0.84,
+        closeRange: 200,
+        mediumRange: 320,
+        gunnerHoldMin: 0.24,
+        gunnerHoldMax: 0.62,
+        archerStageMin: 2,
+        archerStageMax: 4,
+    },
+    hard: {
+        decisionMin: 0.05,
+        decisionMax: 0.12,
+        shootTolerance: 0.11,
+        specialTolerance: 0.1,
+        dangerDistance: 220,
+        projectileDangerDistance: 225,
+        dashChance: 0.88,
+        specialChance: 0.9,
+        shotChance: 0.97,
+        closeRange: 235,
+        mediumRange: 360,
+        gunnerHoldMin: 0.35,
+        gunnerHoldMax: 0.78,
+        archerStageMin: 3,
+        archerStageMax: 5,
+    },
 };
 
 const BUILD_MENU_INFO = {
@@ -470,7 +540,7 @@ function initTouchControls() {
         const isMobile = window.innerWidth <= 768 || 'ontouchstart' in window;
         const shouldShow = isMobile && !inMenu && !gameOver;
         leftTouchArea.style.display = shouldShow ? 'block' : 'none';
-        rightTouchArea.style.display = shouldShow ? 'block' : 'none';
+        rightTouchArea.style.display = shouldShow && currentGameMode !== 'bots' ? 'block' : 'none';
     }
     
     window.addEventListener('resize', updateTouchControlsVisibility);
@@ -495,7 +565,19 @@ function initTouchControls() {
 initTouchControls();
 
 rematchBtn.addEventListener('click', () => {
-    showMenu();
+    showBuildMenu(currentGameMode);
+});
+
+localGameBtn.addEventListener('click', () => {
+    showBuildMenu('local');
+});
+
+onlineGameBtn.addEventListener('click', () => {
+    // Placeholder for future online flow.
+});
+
+botsGameBtn.addEventListener('click', () => {
+    showBuildMenu('bots');
 });
 
 startRoundBtn.addEventListener('click', () => {
@@ -549,15 +631,24 @@ function hideBuildHover() {
     buildHoverCard.classList.add('hidden');
 }
 
+function selectBuildForPlayer(playerId, build, { revealHover = false } = {}) {
+    if (!BUILDS[build]) return;
+    selectedBuilds[playerId] = build;
+    const group = document.querySelector(`.menu-options[data-player="${playerId}"]`);
+    if (!group) return;
+    group.querySelectorAll('.menu-option').forEach(btn => {
+        btn.classList.toggle('selected', btn.getAttribute('data-build') === build);
+    });
+    if (revealHover) showBuildHover(build);
+}
+
 document.querySelectorAll('.menu-options').forEach(group => {
     group.addEventListener('click', (e) => {
         const btn = e.target.closest('.menu-option');
         if (!btn) return;
         const playerId = Number(group.getAttribute('data-player'));
         const build = btn.getAttribute('data-build');
-        selectedBuilds[playerId] = build;
-        group.querySelectorAll('.menu-option').forEach(b => b.classList.remove('selected'));
-        btn.classList.add('selected');
+        selectBuildForPlayer(playerId, build, { revealHover: true });
     });
 
     group.addEventListener('mouseover', (e) => {
@@ -576,6 +667,22 @@ document.querySelectorAll('.menu-options').forEach(group => {
     group.addEventListener('focusout', (e) => {
         if (group.contains(e.relatedTarget)) return;
         hideBuildHover();
+    });
+});
+
+document.querySelectorAll('.menu-random-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const playerId = Number(btn.getAttribute('data-random-player'));
+        const builds = Object.keys(BUILDS);
+        const randomBuild = builds[Math.floor(Math.random() * builds.length)];
+        selectBuildForPlayer(playerId, randomBuild, { revealHover: true });
+    });
+});
+
+document.querySelectorAll('.bot-difficulty-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+        botDifficulty = btn.getAttribute('data-bot-difficulty');
+        configureMenuForMode(currentGameMode);
     });
 });
 
@@ -664,6 +771,185 @@ function getNecroOrbTarget(ownerId, x, y) {
         }
     });
     return best;
+}
+
+function getHumanInputs(player) {
+    const dashKey = player.id === 1 ? 'e' : 'o';
+    const shootKey = player.id === 1 ? 'r' : 'p';
+    const specialKey = player.id === 1 ? 'f' : 'l';
+    return {
+        dashDown: !!keys[dashKey],
+        shootDown: !!keys[shootKey],
+        specialDown: !!keys[specialKey],
+    };
+}
+
+function getIncomingThreat(player, dangerDistance) {
+    let closestThreat = null;
+    let closestDistance = Infinity;
+
+    bullets.forEach(bullet => {
+        if (!bullet.active || bullet.ownerId === player.id) return;
+        const dx = player.x - bullet.x;
+        const dy = player.y - bullet.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > dangerDistance) return;
+        const towardPlayer = (bullet.dirX * dx + bullet.dirY * dy) > 0;
+        if (!towardPlayer) return;
+        if (dist < closestDistance) {
+            closestDistance = dist;
+            closestThreat = bullet;
+        }
+    });
+
+    return closestThreat;
+}
+
+function shouldBotUseSpecial(player, enemy, config, angleError, distance) {
+    switch (player.build) {
+        case 'gunner':
+            return angleError <= config.specialTolerance && distance <= config.mediumRange;
+        case 'railgun':
+            return angleError <= config.specialTolerance * 0.75;
+        case 'swordsman':
+            return distance <= config.closeRange;
+        case 'archer':
+            return angleError <= config.specialTolerance && distance <= config.mediumRange;
+        case 'ninja':
+            return distance <= config.mediumRange && distance >= config.closeRange * 0.7;
+        case 'reaper':
+            return distance <= config.mediumRange;
+        case 'shotgun':
+            return angleError <= config.specialTolerance && distance <= config.mediumRange;
+        case 'pyro':
+            return distance <= config.closeRange * 1.05;
+        case 'necromancer':
+            return summons.filter(s => s.active && s.ownerId === player.id).length < player.buildCfg.cloneCount;
+        case 'juggernaut':
+            return distance <= config.closeRange;
+        default:
+            return false;
+    }
+}
+
+function shouldBotUsePrimary(player, enemy, config, angleError, distance) {
+    switch (player.build) {
+        case 'swordsman':
+            return distance <= config.closeRange;
+        case 'shotgun':
+            return angleError <= config.shootTolerance * 1.1 && distance <= config.closeRange * 1.2;
+        case 'pyro':
+            return distance <= player.buildCfg.flameRange * 0.92 && angleError <= player.buildCfg.flameHalfAngle * (player.botDifficulty === 'hard' ? 0.95 : 1.05);
+        case 'juggernaut':
+            return distance <= config.mediumRange;
+        default:
+            return angleError <= config.shootTolerance && distance <= config.mediumRange * 1.2;
+    }
+}
+
+function getBotInputs(player, dt) {
+    const enemy = player.id === 1 ? p2 : p1;
+    const config = BOT_DIFFICULTY_CONFIG[player.botDifficulty] ?? BOT_DIFFICULTY_CONFIG.normal;
+    const state = player.botState;
+    const inputs = { dashDown: false, shootDown: false, specialDown: false };
+
+    if (!enemy) return inputs;
+
+    state.decisionTimer -= dt;
+    state.dashPulse = Math.max(0, state.dashPulse - dt);
+    state.specialPulse = Math.max(0, state.specialPulse - dt);
+
+    const dx = enemy.x - player.x;
+    const dy = enemy.y - player.y;
+    const distance = Math.hypot(dx, dy);
+    const angleToEnemy = Math.atan2(dy, dx);
+    const angleError = Math.abs(normalizeAngle(angleToEnemy - player.spinAngle));
+    const imminentThreat = getIncomingThreat(player, config.projectileDangerDistance);
+    const closeDanger = distance <= config.dangerDistance;
+
+    if (state.dashPulse > 0) inputs.dashDown = true;
+    if (state.specialPulse > 0) inputs.specialDown = true;
+
+    if (player.build === 'gunner' || player.build === 'archer') {
+        if (state.shootHoldActive) {
+            state.shootHoldTime += dt;
+            inputs.shootDown = true;
+            if (player.build === 'gunner') {
+                const minimumHold = state.targetShootHold * 0.6;
+                const shouldRelease = state.shootHoldTime >= state.targetShootHold
+                    || (state.shootHoldTime >= minimumHold && angleError > config.shootTolerance * 1.45);
+                if (shouldRelease) {
+                    state.shootHoldActive = false;
+                    state.shootHoldTime = 0;
+                    inputs.shootDown = false;
+                }
+            } else {
+                const targetStage = state.targetChargeStage;
+                const targetHold = targetStage * player.buildCfg.chargeStageTime;
+                const shouldRelease = state.shootHoldTime >= targetHold
+                    || (state.shootHoldTime >= player.buildCfg.chargeStageTime && angleError > config.shootTolerance * 1.35);
+                if (shouldRelease) {
+                    state.shootHoldActive = false;
+                    state.shootHoldTime = 0;
+                    inputs.shootDown = false;
+                }
+            }
+        }
+    } else if (player.build === 'pyro') {
+        if (shouldBotUsePrimary(player, enemy, config, angleError, distance)) {
+            inputs.shootDown = true;
+        }
+    } else if (state.shootPulse > 0) {
+        state.shootPulse = Math.max(0, state.shootPulse - dt);
+        inputs.shootDown = true;
+    }
+
+    const needsDecision = state.decisionTimer <= 0;
+    if (!needsDecision) return inputs;
+    state.decisionTimer = randBetween(config.decisionMin, config.decisionMax);
+
+    if (!inputs.dashDown && player.dashCooldown <= 0 && (imminentThreat || closeDanger) && Math.random() <= config.dashChance) {
+        state.dashPulse = 0.08;
+        inputs.dashDown = true;
+    }
+
+    if (!inputs.specialDown && player.specialCooldown <= 0 && shouldBotUseSpecial(player, enemy, config, angleError, distance) && Math.random() <= config.specialChance) {
+        state.specialPulse = 0.08;
+        inputs.specialDown = true;
+    }
+
+    if (player.shootCooldown > 0) return inputs;
+
+    if (player.build === 'gunner') {
+        if (!state.shootHoldActive && shouldBotUsePrimary(player, enemy, config, angleError, distance) && Math.random() <= config.shotChance) {
+            state.shootHoldActive = true;
+            state.shootHoldTime = 0;
+            state.targetShootHold = randBetween(config.gunnerHoldMin, config.gunnerHoldMax);
+            inputs.shootDown = true;
+        }
+        return inputs;
+    }
+
+    if (player.build === 'archer') {
+        if (!state.shootHoldActive && shouldBotUsePrimary(player, enemy, config, angleError, distance) && Math.random() <= config.shotChance) {
+            state.shootHoldActive = true;
+            state.shootHoldTime = 0;
+            state.targetChargeStage = Math.floor(randBetween(config.archerStageMin, config.archerStageMax + 1));
+            inputs.shootDown = true;
+        }
+        return inputs;
+    }
+
+    if (player.build !== 'pyro' && shouldBotUsePrimary(player, enemy, config, angleError, distance) && Math.random() <= config.shotChance) {
+        state.shootPulse = 0.08;
+        inputs.shootDown = true;
+    }
+
+    return inputs;
+}
+
+function getPlayerInputs(player, dt) {
+    return player.isBot ? getBotInputs(player, dt) : getHumanInputs(player);
 }
 
 function releaseHookOnPlayer(playerId) {
@@ -756,13 +1042,25 @@ function resolveJuggernautCloneCollision(player, clone) {
 }
 
 class Player {
-    constructor(id, color, startX, startY, startAngle, buildName = 'gunner') {
+    constructor(id, color, startX, startY, startAngle, buildName = 'gunner', options = {}) {
         this.id = id;
         this.color = color;
         this.x = startX;
         this.y = startY;
         this.build = BUILDS[buildName] ? buildName : 'gunner';
         this.buildCfg = BUILDS[this.build];
+        this.isBot = !!options.isBot;
+        this.botDifficulty = options.botDifficulty ?? 'normal';
+        this.botState = {
+            decisionTimer: 0,
+            shootPulse: 0,
+            specialPulse: 0,
+            dashPulse: 0,
+            shootHoldActive: false,
+            shootHoldTime: 0,
+            targetShootHold: 0,
+            targetChargeStage: 1,
+        };
         
         // Velocity direction (normalized vector)
         this.dirX = Math.cos(startAngle);
@@ -777,6 +1075,7 @@ class Player {
         
         this.maxHp = this.buildCfg.maxHp ?? MAX_HP;
         this.hp = this.maxHp;
+        this.isEliminated = false;
         
         // Dash mechanics
         this.dashTimer = 0; // how long current dash has been active
@@ -919,13 +1218,11 @@ class Player {
         }
 
         // Input Handling
-        const dashKey = this.id === 1 ? 'e' : 'o';
-        const shootKey = this.id === 1 ? 'r' : 'p';
-        const specialKey = this.id === 1 ? 'f' : 'l';
-        const shootDown = !!keys[shootKey];
-        const specialDown = !!keys[specialKey];
+        const inputs = getPlayerInputs(this, dt);
+        const shootDown = inputs.shootDown;
+        const specialDown = inputs.specialDown;
 
-        if (keys[dashKey] && this.dashCooldown <= 0 && !this.isDashing) {
+        if (inputs.dashDown && this.dashCooldown <= 0 && !this.isDashing) {
             this.isDashing = true;
             this.dashTimer = 1.0;     // Lasts 1 second
             this.dashCooldown = 5.0;  // 5 second cooldown
@@ -1506,8 +1803,18 @@ class Player {
         this.hp = Math.max(0, this.hp - effectiveAmount);
         this.updateUI();
         if (this.hp <= 0 && !gameOver) {
+            this.isEliminated = true;
             spawnDeathExplosion(this.x, this.y, this.color);
-            endGame(this.id === 1 ? 2 : 1);
+            gameOver = true;
+            roundEndActive = true;
+            if (koRevealTimeout) {
+                clearTimeout(koRevealTimeout);
+                koRevealTimeout = null;
+            }
+            koRevealTimeout = setTimeout(() => {
+                endGame(this.id === 1 ? 2 : 1);
+                koRevealTimeout = null;
+            }, 1000);
         }
     }
 
@@ -1522,6 +1829,7 @@ class Player {
     }
 
     draw(ctx) {
+        if (this.isEliminated) return;
         // Rainbow smear effect if dashing
         if (this.isDashing) {
             // Draw 5 trailing smear frames, fading out and cycling colors
@@ -3042,23 +3350,33 @@ function spawnImpact(x, y, color) {
 }
 
 function spawnDeathExplosion(x, y, color) {
-    // Big burst: 40 colored particles
-    for (let i = 0; i < 40; i++) {
+    // Massive colored blast
+    for (let i = 0; i < 360; i++) {
         const angle = Math.random() * Math.PI * 2;
-        const speed = 100 + Math.random() * 400;
-        const life = 0.4 + Math.random() * 0.6;
+        const speed = 420 + Math.random() * 1400;
+        const life = 1.2 + Math.random() * 1.3;
         particles.push(new Particle(x, y, Math.cos(angle), Math.sin(angle), color, speed, life));
     }
-    // 20 white/yellow sparks
-    for (let i = 0; i < 20; i++) {
+
+    // Bright sparks and core flash
+    for (let i = 0; i < 170; i++) {
         const angle = Math.random() * Math.PI * 2;
-        const speed = 150 + Math.random() * 350;
-        const life = 0.3 + Math.random() * 0.4;
+        const speed = 520 + Math.random() * 1200;
+        const life = 0.8 + Math.random() * 0.9;
         const sparkColor = Math.random() > 0.5 ? '#ffffff' : '#fbbf24';
         particles.push(new Particle(x, y, Math.cos(angle), Math.sin(angle), sparkColor, speed, life));
     }
-    // Heavy screen shake
-    screenShake = { x: 0, y: 0, duration: 0.4, intensity: 20 };
+
+    // Outer shock ring made from slower debris
+    for (let i = 0; i < 130; i++) {
+        const angle = (Math.PI * 2 * i) / 130;
+        const speed = 320 + Math.random() * 260;
+        const life = 0.9 + Math.random() * 0.45;
+        particles.push(new Particle(x, y, Math.cos(angle), Math.sin(angle), 'rgba(241,245,249,0.85)', speed, life));
+    }
+
+    // Extreme screen shake
+    screenShake = { x: 0, y: 0, duration: 0.9, intensity: 42 };
 }
 
 let p1, p2;
@@ -3088,11 +3406,43 @@ function spawnPickup() {
     pickups.push(new Pickup(type, CENTER_X + Math.cos(angle) * r, CENTER_Y + Math.sin(angle) * r));
 }
 
+function updateBotDifficultyButtons() {
+    document.querySelectorAll('.bot-difficulty-option').forEach(btn => {
+        btn.classList.toggle('selected', btn.getAttribute('data-bot-difficulty') === botDifficulty);
+    });
+}
+
+function configureMenuForMode(mode) {
+    currentGameMode = mode;
+    const isBotsMode = mode === 'bots';
+    botSettings.classList.toggle('hidden', !isBotsMode);
+    menuSubtitle.textContent = isBotsMode
+        ? 'Pick your build, set the bot build, then choose a difficulty.'
+        : 'Pick a build for each player, then start the round.';
+    menuPlayer1Title.textContent = 'PLAYER 1';
+    menuPlayer2Title.textContent = isBotsMode ? 'BOT' : 'PLAYER 2';
+    player1Name.textContent = 'PLAYER 1';
+    player2Name.textContent = isBotsMode ? `BOT ${botDifficulty.toUpperCase()}` : 'PLAYER 2';
+    startRoundBtn.textContent = isBotsMode ? 'START BOT MATCH' : 'START ROUND';
+    menuHint.innerHTML = isBotsMode
+        ? 'P1: Dash <span class="key">E</span> Shoot <span class="key">R</span> Ability <span class="key">F</span><br>The bot controls itself based on the selected difficulty.'
+        : 'P1: Dash <span class="key">E</span> | Shoot <span class="key">R</span> | Ability <span class="key">F</span><br>P2: Dash <span class="key">O</span> | Shoot <span class="key">P</span> | Ability <span class="key">L</span>';
+    updateBotDifficultyButtons();
+}
+
 function initGame() {
     // Top Right to Bottom Left
     p1 = new Player(1, '#3b82f6', CENTER_X + 100, CENTER_Y - 100, Math.PI * 0.75, selectedBuilds[1]);
     // Bottom Left to Top Right
-    p2 = new Player(2, '#ef4444', CENTER_X - 100, CENTER_Y + 100, -Math.PI * 0.25, selectedBuilds[2]);
+    p2 = new Player(
+        2,
+        '#ef4444',
+        CENTER_X - 100,
+        CENTER_Y + 100,
+        -Math.PI * 0.25,
+        selectedBuilds[2],
+        { isBot: currentGameMode === 'bots', botDifficulty }
+    );
     
     bullets = [];
     particles = [];
@@ -3101,7 +3451,19 @@ function initGame() {
     screenShake = { x: 0, y: 0, duration: 0, intensity: 0 };
     collisionDamageCooldown = 0;
     gameOver = false;
+    roundEndActive = false;
+    if (koRevealTimeout) {
+        clearTimeout(koRevealTimeout);
+        koRevealTimeout = null;
+    }
+    if (rematchRevealTimeout) {
+        clearTimeout(rematchRevealTimeout);
+        rematchRevealTimeout = null;
+    }
+    gameOverScreen.classList.remove('ko-animate', 'show-rematch');
     gameOverScreen.classList.add('hidden');
+    rematchBtn.classList.add('hidden');
+    titleScreen.classList.add('hidden');
     menuScreen.classList.add('hidden');
     inMenu = false;
     
@@ -3118,11 +3480,43 @@ function initGame() {
     requestAnimationFrame(gameLoop);
 }
 
-function showMenu() {
-    // reset states so you always start from menu
+function showTitleScreen() {
     gameOver = true;
     inMenu = true;
+    roundEndActive = false;
+    if (koRevealTimeout) {
+        clearTimeout(koRevealTimeout);
+        koRevealTimeout = null;
+    }
+    if (rematchRevealTimeout) {
+        clearTimeout(rematchRevealTimeout);
+        rematchRevealTimeout = null;
+    }
+    gameOverScreen.classList.remove('ko-animate', 'show-rematch');
     gameOverScreen.classList.add('hidden');
+    rematchBtn.classList.add('hidden');
+    menuScreen.classList.add('hidden');
+    titleScreen.classList.remove('hidden');
+}
+
+function showBuildMenu(mode = currentGameMode) {
+    // reset states so you always start from the build menu
+    configureMenuForMode(mode);
+    gameOver = true;
+    inMenu = true;
+    roundEndActive = false;
+    if (koRevealTimeout) {
+        clearTimeout(koRevealTimeout);
+        koRevealTimeout = null;
+    }
+    if (rematchRevealTimeout) {
+        clearTimeout(rematchRevealTimeout);
+        rematchRevealTimeout = null;
+    }
+    gameOverScreen.classList.remove('ko-animate', 'show-rematch');
+    gameOverScreen.classList.add('hidden');
+    rematchBtn.classList.add('hidden');
+    titleScreen.classList.add('hidden');
     menuScreen.classList.remove('hidden');
 }
 
@@ -3133,10 +3527,30 @@ function startRoundFromMenu() {
 
 function endGame(winnerId) {
     gameOver = true;
+    roundEndActive = false;
+    if (koRevealTimeout) {
+        clearTimeout(koRevealTimeout);
+        koRevealTimeout = null;
+    }
+    if (rematchRevealTimeout) {
+        clearTimeout(rematchRevealTimeout);
+        rematchRevealTimeout = null;
+    }
+    gameOverScreen.classList.remove('ko-animate', 'show-rematch');
+    void gameOverScreen.offsetWidth;
     gameOverScreen.classList.remove('hidden');
-    winnerText.textContent = `PLAYER ${winnerId} WINS!`;
+    const isBotWinner = currentGameMode === 'bots' && winnerId === 2;
+    winnerText.textContent = 'KO';
     winnerText.style.color = winnerId === 1 ? 'var(--p1-color)' : 'var(--p2-color)';
     winnerText.style.textShadow = `0 0 20px ${winnerId === 1 ? 'rgba(59, 130, 246, 0.5)' : 'rgba(239, 68, 68, 0.5)'}`;
+    rematchBtn.textContent = isBotWinner ? `REMATCH VS ${botDifficulty.toUpperCase()} BOT` : 'REMATCH';
+    rematchBtn.classList.add('hidden');
+    gameOverScreen.classList.add('ko-animate');
+    rematchRevealTimeout = setTimeout(() => {
+        rematchBtn.classList.remove('hidden');
+        gameOverScreen.classList.add('show-rematch');
+        rematchRevealTimeout = null;
+    }, 1000);
 }
 
 function drawArena() {
@@ -3268,6 +3682,9 @@ function gameLoop(timestamp) {
             }
         });
         pickups = pickups.filter(pk => pk.active);
+    } else if (roundEndActive && !inMenu) {
+        particles.forEach(p => p.update(dt));
+        particles = particles.filter(p => p.active);
     }
 
     // Always draw even if game over so the explosion/last state remains
@@ -3280,7 +3697,7 @@ function gameLoop(timestamp) {
 
     ctx.restore(); // Undo screen shake translate
 
-    if (!gameOver && !inMenu) {
+    if ((!gameOver || roundEndActive) && !inMenu) {
         requestAnimationFrame(gameLoop);
     }
 }
@@ -3338,4 +3755,4 @@ if (document.readyState === 'loading') {
 }
 
 // Start
-showMenu();
+showTitleScreen();
