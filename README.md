@@ -1,691 +1,195 @@
-# Orbit Duel Documentation
+# Orbit Duel
 
-This document describes how the game currently works in the codebase, including gameplay rules, controls, build abilities, pickups, hidden test cheats, and project structure.
-
-## Overview
-
-Orbit Duel is a local 1v1 arena game built with HTML, CSS, and JavaScript.
-
-- Two players fight inside a circular arena.
-- Each player selects one build before the round starts.
-- Players are always moving in the direction of their current travel vector.
-- The first player to reduce the opponent to `0` HP wins.
+Orbit Duel is a browser arena fighter built with plain HTML, CSS, and JavaScript. Two orb fighters bounce around a circular arena, pick a build, and try to delete each other before the other build deletes them first.
 
 ## How To Run
 
-Open https://sir0reo.github.io/Orbit-Duel/ in your browser
+- Open [https://sir0reo.github.io/Orbit-Duel/](https://sir0reo.github.io/Orbit-Duel/) in a browser
+- Or serve the repo locally and open `index.html`
+- `package.json` includes `npm start`, which runs `npx http-server -p 3000`
 
-## Tech Stack
+## Current Flow
 
-- Frontend: plain HTML/CSS/JavaScript
-- Main gameplay file: `script.js`
-
-## Game Window And Layout
-
-- Game canvas size: `800 x 800`
-- Arena shape: circular
-- Arena radius: `380`
-- Player radius: `25`
-
-The UI shows:
-
-- Player 1 health and cooldown bars on the left
-- Player 2 health and cooldown bars on the right
-- A build selection menu before the round
-- A game-over overlay with a rematch button
-
-## Goal Of The Game
-
-The objective is to defeat the other player by dealing damage until their HP reaches `0`.
-
-Every build starts with:
-
-- `1000` max HP
-- A dash
-- A primary attack
-- A special ability
+- The game opens on a title screen
+- `Local Game` opens the build-select menu for human vs human
+- `Bots` opens the same build-select menu for human vs bot
+- `Online` is present on the title screen but is still a placeholder
+- Each player side in the build menu has a `Random` button
+- Bot mode includes a difficulty selector: `Easy`, `Normal`, `Hard`
 
 ## Controls
 
 ### Player 1
 
 - `E`: Dash
-- `R`: Shoot / primary attack
+- `R`: Primary attack
 - `F`: Ability
 
 ### Player 2
 
 - `O`: Dash
-- `P`: Shoot / primary attack
+- `P`: Primary attack
 - `L`: Ability
 
-## Core Movement Rules
+In bot mode, only Player 1 is human-controlled.
 
-Players do not steer directly with WASD or arrow keys. Instead, they continuously move according to their stored direction vector.
+## Arena And Match Rules
 
-### Base Movement
+- Arena shape: circular
+- Player radius: `25`
+- Base move speed: `200`
+- Dash duration: `1.0s`
+- Dash cooldown: `5.0s`
+- Players continuously move using their stored direction vector
+- Wall hits reflect movement and add a small inward bias so fighters do not get trapped in endless border loops
+- The arena is slightly larger than the original version and the canvas/frame scales to keep the border visible
 
-- Base move speed: `200` pixels/second
-- Swordsman base move speed is `30%` faster than normal
-- Reaper gets extra movement speed while its ability is active
-- Reaper debuff can slow the enemy
+## Round Flow
 
-### Dash
+- The match starts from build select
+- Both sides default to `Gunner`
+- On death, the defeated orb disappears immediately
+- A giant death explosion plays first
+- `KO` appears `1` second later
+- The rematch button pops in `1` second after the KO screen appears
+- Rematch returns to the build-select menu for the current mode
 
-- Dash duration: `1.0` second
-- Dash cooldown: `5.0` seconds
-- Dash speed multiplier: `3x`
+## Modes
 
-### Arena Wall Bounce
+### Local Game
 
-When a player reaches the arena boundary:
+- Human vs human
+- Both players choose builds manually or with `Random`
 
-- Their movement direction is reflected off the wall
-- A small random angle is added to prevent repetitive wall loops
-- The player is pushed back inside the arena boundary
+### Bots
 
-If the opponent is a Railgun and has its boundary ability active, touching the wall also causes bonus damage.
-
-### Player-On-Player Collision
-
-When the two player balls collide:
-
-- They are separated so they no longer overlap
-- Their movement directions bounce off each other
-- A visual impact effect is spawned
-
-This keeps player bodies from stacking on top of each other.
-
-## Global Combat Rules
-
-### Health
-
-- All builds have `1000` HP
-- Damage cannot reduce HP below `0`
-- Healing cannot raise HP above max HP
-
-### Cooldowns
-
-Each player has three cooldown bars:
-
-- Dash cooldown
-- Primary attack cooldown
-- Ability cooldown
-
-Most abilities start the round on cooldown.
-
-### Rotation / Aim
-
-Each player has a spinning aim angle called `spinAngle`.
-
-- Base spin speed is faster than a simple half-turn rate
-- Gunner reverses spin direction every time it fires
-- Railgun has slower spin than other builds
-- Swordsman spin becomes much faster during sword attacks
-- Ninja slash temporarily freezes aim rotation while the slash animation resolves
+- Human vs AI
+- You still choose both builds
+- Bot difficulty changes reaction speed, aim timing, attack commitment, and ability usage
 
 ## Builds
 
 ## Gunner
 
-The Gunner is the default ranged build.
-
-### Primary Attack
-
-- Base cooldown: `2.0` seconds
-- Damage: `100`
-- Projectile type: standard bullet
-
-The Gunner uses a hold-to-fire system:
-
-- Pressing shoot starts charging the shot
-- Releasing shoot fires it
-- If held long enough, it auto-fires after `1.0` second
-- While holding past a short delay, the player moves at one-third speed
-
-### Ability
-
-The Gunner ability fires a rapid stream of bullets.
-
-- Ability cooldown: `20.0` seconds
-- Duration window: `1.0` second
-- Total bullets: `30`
-- Bullet damage: `20`
-- Spread: `20` degrees
-
-While this ability is firing:
-
-- The Gunner moves at `50%` speed
+- Hold-to-fire primary
+- Releasing fires one bullet
+- Holding too long auto-fires
+- Ability fires a short bullet stream
 
 ## Railgun
 
-The Railgun is a precision beam build.
-
-### Primary Attack
-
-- Cooldown: `3.0` seconds
-- Beam damage: `50`
-
-The railgun beam:
-
-- Fires in the current aim direction
-- Extends until it exits the arena
-- Has a short visible beam duration
-- Uses live hit detection while visible
-- Can hit the opponent once per beam
-
-### Ability
-
-The Railgun ability electrifies the arena boundary.
-
-- Ability cooldown: `30.0` seconds
-- Active duration: `5.0` seconds
-- Boundary damage: `50`
-
-While active:
-
-- If the opponent collides with the arena wall, they take extra damage
-- The arena border gets a visual energy effect
+- Primary is a hitscan beam
+- Ability electrifies the arena border
 
 ## Swordsman
 
-The Swordsman is a close-range melee build.
-
-### Passive Traits
-
-- Movement speed is `30%` faster than the normal base movement
-
-### Primary Attack
-
-- Cooldown: `3.0` seconds
-- Damage: `75`
-- Attack duration: `1.0` second
-- Spin multiplier during standard attack: `4.0x`
-
-The sword attack is a temporary melee hit window.
-
-### Ability
-
-The Swordsman ability is a short burst slash.
-
-- Ability cooldown: `20.0` seconds
-- Ability damage: `125`
-- Active burst time: `0.35` seconds
-- Spin multiplier during ability: `22.0x`
+- Faster movement than most builds
+- Primary is a melee swing
+- Ability is a high-speed sword burst
 
 ## Archer
 
-The Archer is a charge-shot projectile build.
-
-### Primary Attack
-
-- Cooldown: `0.5` seconds
-- Charge stage time: `1.2` seconds per stage
-- Max stages: `5`
-- Base damage per stage: `50`
-- Arrow speed multiplier: `0.7`
-
-The Archer attack works like this:
-
-- Hold the shoot key to charge
-- Stages increase over time
-- Release to fire
-- If charge stage is `0`, no arrow is fired
-- Damage is `stage * 50`
-
-### Ability
-
-The Archer ability buffs the next arrow only.
-
-- Ability cooldown: `30.0` seconds
-- Next arrow damage multiplier: `1.5x`
-- Next arrow size multiplier: `2.0x`
-- Next arrow bounce count: `3`
-
-The buff is consumed when the next arrow is fired.
+- Charges arrows in stages
+- Release fires the current charge
+- Ability buffs the next arrow with more damage, larger size, and bounces
+- Archer bots now actually charge and release based on aim quality
 
 ## Ninja
 
-The Ninja is a mobility and combo build.
-
-### Primary Attack
-
-- Cooldown: `4.0` seconds
-- Projectile: ninja star
-- Star damage: `50`
-
-The ninja star:
-
-- Spins while flying
-- Uses the Archer-style slower projectile speed
-- Triggers a combo if it hits the opponent
-
-### On Ninja Star Hit
-
-When the star hits:
-
-- The target takes `50` damage
-- The Ninja teleports behind the target
-- The Ninja begins a follow-up slash animation
-- The slash can damage once if the enemy is inside the sweep arc
-
-### Slash Follow-Up
-
-- Slash damage: `100`
-- Katana range: `54`
-- Follow-up slash duration: `0.33` seconds
-
-The slash:
-
-- Is based on a sweeping arc in front of the Ninja
-- Uses a stored slash base angle
-- Deals damage once per slash
-- Continues animating briefly even after landing its hit
-
-### Ability
-
-The Ninja ability is an instant reposition behind the enemy.
-
-- Ability cooldown: `25.0` seconds
-
-When used:
-
-- The Ninja teleports to a point behind the opponent
-- The Ninja reorients to face the target
-- A burst of particles is spawned at the previous position
+- Primary throws a ninja star
+- Star hit teleports the Ninja behind the target and starts a slash follow-up
+- Ability teleports behind the opponent
+- Ability now leaves a large smoke poof at the old position
+- Medium and hard ninja bots wait for primary to be ready before teleporting, then force a follow-up attack
+- Slash visuals were updated so the katana points forward during the cut and the hit reads more clearly
 
 ## Reaper
 
-The Reaper is a throwable weapon and debuff build.
-
-### Primary Attack
-
-- Cooldown: `1.0` second
-- Scythe damage: `50`
-
-The Reaper throws a scythe projectile.
-
-Important behavior:
-
-- The Reaper can only throw the scythe when it currently has it
-- Once thrown, `hasScythe` becomes false
-- The scythe returns after hitting the wall
-- The scythe can be caught again by its owner
-- The returning scythe homes back toward the owner
-
-### Scythe Hit Behavior
-
-When the scythe touches the opponent:
-
-- It can damage the target repeatedly, but only once every `200ms` per target
-- Base scythe lifesteal is `20%` of damage dealt
-- While Reaper ability is active, lifesteal becomes `50%`
-
-### Ability
-
-The Reaper ability buffs the Reaper and debuffs the opponent.
-
-- Ability cooldown: `30.0` seconds
-- Active time on the Reaper: `5.0` seconds
-- Debuff time on the opponent: `5.0` seconds
-
-Effects applied to the enemy:
-
-- Damage taken multiplier: `0.7`
-- Movement speed multiplier: `0.5`
-- Shoot cooldown multiplier: `1.3`
-
-Effects applied to the Reaper:
-
-- Movement speed multiplier: `1.3`
-- Scythe throw speed multiplier: `1.2`
-- Lifesteal on scythe hits becomes `50%`
+- Throws a returning scythe
+- Ability buffs the Reaper and debuffs the enemy
 
 ## Shotgun
 
-The Shotgun is a close-range spread build with a hook-based crowd-control ability.
-
-### Primary Attack
-
-- Cooldown: `2.0` seconds
-- Pellet count: `8`
-- Damage per pellet: `25`
-- Spread: `35` degrees
-- Range: short
-
-The Shotgun fires a spread of pellets in the aim direction.
-
-- Pellets lose damage over distance
-- Full damage requires close range
-- A syringe buff increases the next shotgun blast's pellet damage
-
-### Ability
-
-The Shotgun ability throws a large anchor-like hook.
-
-- Ability cooldown: `15.0` seconds
-- Hook damage: `50`
-- Slow duration: `3.0` seconds
-- Slow movement multiplier: `0.5`
-
-Current hook behavior:
-
-- The hook travels until it hits the opponent or the arena border
-- A rope is drawn from the Shotgun player to the hook
-- On first hit, it damages once, slows, and latches onto the target
-- While latched, it pulls the target toward the Shotgun player
-- The hook then releases and disappears if the target reaches the Shotgun player
-- The hook also releases if the pulled target is hit by a shotgun pellet
-- If the hook reaches the arena border without latching, it returns to the Shotgun player
+- Fires a close-range pellet spread
+- Ability throws a hook that damages, slows, and pulls
 
 ## Pyro
 
-The Pyro is a sustained flamethrower build with burn setup and an expanding fire-wave ability.
+- Uses ammo instead of a normal primary cooldown
+- Primary is a narrow flamethrower cone
+- Targets can be ignited after sustained exposure
+- Ability sends out an expanding fire wave
+- Pyro bots now hold flame much longer instead of stuttering
 
-### Passive Traits
+## Necromancer
 
-- Uses an ammo bar instead of a normal primary cooldown
-- A full ammo bar allows `5.0` seconds of continuous fire
-- Ammo recharges slowly while not firing
-- The flamethrower cannot be started below `10%` ammo
-- If the player is already firing before dropping below `10%`, they may continue until the ammo bar reaches `0`
+- Primary fires a homing orb with lighter tracking than before
+- Ability summons clones
+- Clones fire their own orbs for `50` damage
+- Clones automatically expire after `30` seconds if they are not destroyed
 
-### Primary Attack
+## Juggernaut
 
-- Range: `280`
-- Cone angle: `-5` to `5` degrees
-- Damage: `1` every `0.05` seconds while the target is inside the cone
-
-The Pyro primary attack:
-
-- Fires a narrow cone in the aim direction
-- Uses a dotted aim line that only extends to the cone range
-- Shows animated flame streaks while firing
-- Causes a light screen shake when damage ticks land
-
-### Burn Effect
-
-- Burn trigger: target must stay in the cone for at least `0.3` seconds before leaving it
-- Burn duration: `2.0` seconds
-- Burn damage: `10` per second
-- Burn does not stack; refreshing the cone exposure resets the timer logic
-
-### Ability
-
-The Pyro ability sends an expanding circular fire wave outward from the Pyro.
-
-- Ability cooldown: `30.0` seconds
-- Wave damage: `50`
-- Pushes the opponent outward away from the Pyro
-- Applies burn on hit
-- Burn duration from ability: `5.0` seconds
-
-## Projectiles
-
-The game uses a shared `Bullet` class for most attack objects.
-
-Projectile types currently used:
-
-- Standard bullet
-- Arrow
-- Ninja star
-- Scythe
-
-### Shared Projectile Rules
-
-- Default projectile lifetime: `10.0` seconds
-- Projectiles move every frame using their direction and speed
-- Most projectiles disappear on wall impact
-- Projectiles spawn impact particles when they hit
-
-### Arrow Rules
-
-- Can bounce if buffed by Archer ability
-- Bounce count is tracked per projectile
-- Buffed arrows become larger and stronger
-
-### Ninja Star Rules
-
-- Spins visually while traveling
-- On player hit, it deals damage and starts the Ninja teleport-slash combo
-
-### Scythe Rules
-
-- Spins visually while traveling
-- On first wall contact, it changes to return mode instead of disappearing
-- In return mode, it homes toward its owner
-- It can be recovered by touching the owner
+- Higher max HP than the other builds
+- Primary creates a gravity pull window
+- Ability grants temporary invulnerability
+- Medium and hard juggernaut bots only use primary when the opponent is actually inside gravity range
 
 ## Pickups
 
-Pickups spawn during a round.
+Two pickups can spawn during rounds:
 
-### Spawn Timing
+- `Medkit`: heals `100`
+- `Syringe`: buffs the next base attack by `1.3x`
 
-- Minimum spawn delay: `15.0` seconds
-- Maximum spawn delay: `30.0` seconds
+## Bot Notes
 
-Pickups spawn at random valid positions inside the arena and avoid appearing too close to either player.
+Bot logic lives in `script.js` and currently handles:
 
-### Pickup Types
+- Difficulty-based aim tolerance
+- Charge timing for Gunner and Archer
+- Flamethrower hold timing for Pyro
+- Teleport-follow-up logic for Ninja
+- Range-gated primary usage for Juggernaut
 
-#### Medkit
+## Effects And Presentation
 
-- Heals `100` HP
+The game currently includes:
 
-#### Syringe
+- Title screen with mode buttons
+- Build preview card in the menu
+- KO animation and delayed rematch reveal
+- Large death explosions
+- Impact particles
+- Dash trails
+- Smoke poofs for Ninja teleports
+- Slash VFX for Ninja hits
+- Railgun border effect
 
-- Buffs the next base attack only
-- Damage multiplier: `1.3x`
+## Tech Stack
 
-The syringe buff is consumed the next time a relevant attack uses it.
+- HTML
+- CSS
+- JavaScript
 
-## Damage, Healing, And Debuffs
+Main gameplay logic lives in `script.js`.
 
-### Damage Flow
+## Project Structure
 
-Damage generally works like this:
+- `index.html`: HUD, title screen, menus, overlays, canvas
+- `style.css`: layout, menu styling, HUD styling, overlay styling
+- `script.js`: gameplay, builds, bots, particles, arena logic, round flow
 
-1. An attack hits the target.
-2. Some attacks apply target-side debuff scaling.
-3. The target loses HP.
-4. If HP reaches `0`, the round ends.
+## Hidden Cheats
 
-### Reaper Debuff Interaction
+These still exist for local testing:
 
-When the Reaper debuff is active on a player:
+- Press `.` three times within `2` seconds for slow motion
+- Press `,` three times within `2` seconds to instantly refresh both abilities
 
-- Incoming attack damage is scaled by `0.7`
-- Movement is slower
-- Shoot cooldowns are worse
+## Notes
 
-This means the current debuff reduces the damage the target actually takes, rather than amplifying it.
-
-## Hidden Playtesting Cheats
-
-These cheats last until the tab or app view is refreshed.
-
-### Slow Motion Cheat
-
-Press `.` three times within `2` seconds:
-
-- The whole game runs at `20%` speed
-- This is done by scaling `dt` in the main game loop
-
-### Instant Ability Reload Cheat
-
-Press `,` three times within `2` seconds:
-
-- Both players' ability cooldowns are set to `0`
-- Both UI cooldown bars update immediately
-
-## Round Flow
-
-### Start Of Session
-
-- The game opens on the build selection menu
-- Both players default to `Gunner`
-
-### Start Of Round
-
-When a round begins:
-
-- Player 1 spawns near the top-right side
-- Player 2 spawns near the bottom-left side
-- Key states are reset
-- Health bars are refreshed
-- The first pickup spawn timer is scheduled
-
-### End Of Round
-
-When one player reaches `0` HP:
-
-- A death explosion effect is spawned
-- The game-over overlay appears
-- The winner text is updated
-
-### Rematch
-
-Pressing rematch returns to the build-selection menu.
-
-## Visual Effects
-
-The game includes several effects to make hits and abilities readable:
-
-- Screen shake on impacts and heavy events
-- Death explosion particles
-- Impact starburst particles
-- Railgun energized boundary ring
-- Reaper ability aura
-- Ninja slash arc VFX
-- Dash rainbow trail effect
-- Pickup glow effects
-
-## Code Structure
-
-### `index.html`
-
-Defines:
-
-- The HUD
-- The build selection menu
-- The game-over screen
-- The canvas element
-
-### `style.css`
-
-Handles:
-
-- Layout
-- HUD styling
-- Menu styling
-- Overlays
-- General visual presentation
-
-### `script.js`
-
-Contains almost all gameplay logic:
-
-- Constants and tuning values
-- Build definitions
-- Input listeners
-- Secret cheat handling
-- Player logic
-- Projectile logic
-- Particle effects
-- Pickup logic
-- Arena drawing
-- Main game loop
-
-
-## Important Classes And Systems
-
-### `Player`
-
-Responsible for:
-
-- Movement
-- Cooldowns
-- Attack handling
-- Ability activation
-- Taking damage
-- Healing
-- Rendering
-- Build-specific state
-
-### `Bullet`
-
-Responsible for:
-
-- Projectile movement
-- Projectile lifetime
-- Wall collision
-- Player hit detection
-- Special projectile behavior by type
-- Projectile rendering
-
-### `Particle`
-
-Responsible for:
-
-- Short-lived visual effects
-- Motion and fading over time
-
-### `Pickup`
-
-Responsible for:
-
-- Pickup position
-- Pickup rendering
-- Medkit or syringe identity
-
-## Main Loop
-
-The game loop:
-
-1. Computes `dt`
-2. Applies global time scaling
-3. Updates screen shake
-4. Draws the arena
-5. Updates players
-6. Resolves player-body collision
-7. Updates bullets
-8. Updates particles
-9. Spawns and resolves pickups
-10. Draws all world objects
-11. Requests the next animation frame
-
-## Current Defaults And Notable Values
-
-- Arena radius: `380`
-- Player HP: `1000`
-- Player radius: `25`
-- Base move speed: `200`
-- Dash multiplier: `3`
-- Dash cooldown: `5.0`
-- Gunner shoot cooldown: `2.0`
-- Gunner ability cooldown: `20.0`
-- Railgun shoot cooldown: `3.0`
-- Railgun ability cooldown: `30.0`
-- Swordsman shoot cooldown: `3.0`
-- Swordsman ability cooldown: `20.0`
-- Archer shoot cooldown: `0.5`
-- Archer ability cooldown: `30.0`
-- Ninja shoot cooldown: `4.0`
-- Ninja ability cooldown: `25.0`
-- Reaper shoot cooldown: `1.0`
-- Reaper ability cooldown: `30.0`
-- Medkit heal: `100`
-- Syringe multiplier: `1.3`
-
-## Notes For Future Maintenance
-
-- Most tuning values live near the top of `script.js`
+- Most tuning values are near the top of `script.js`
 - Build balance is centralized in the `BUILDS` object
-- Attack-specific behavior is mostly inside `Player.update()` and `Bullet.update()`
-- UI cooldown bars are updated through `Player.updateUI()`
-- Hidden testing cheats are handled through the keydown listener and `trackSecretCheat()`
-
-## Summary
-
-This project is a local arena dueling game where every build uses the same movement shell but radically different attack logic. Most gameplay behavior is implemented in a single script file, which makes it fast to iterate on balance but also means documentation like this is useful for tracking how each system currently behaves.
+- Bot tuning also lives in `script.js`
+- If you change arena size, also check `resizeCanvas()` and `drawArena()`
