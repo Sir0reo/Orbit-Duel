@@ -36,7 +36,7 @@ const buildHoverDesc = document.getElementById('build-hover-desc');
 const buildHoverStats = document.getElementById('build-hover-stats');
 
 // Constants (will be updated by resizeCanvas)
-let ARENA_RADIUS = 380; // slightly less than 400 to leave a border
+let ARENA_RADIUS = 388; // slightly larger than the original arena while keeping the border visible
 let CENTER_X = canvas.width / 2;
 let CENTER_Y = canvas.height / 2;
 
@@ -301,6 +301,7 @@ const BOT_DIFFICULTY_CONFIG = {
         gunnerHoldMax: 0.42,
         archerStageMin: 1,
         archerStageMax: 2,
+        pyroHoldTime: 0.8,
     },
     normal: {
         decisionMin: 0.12,
@@ -318,6 +319,7 @@ const BOT_DIFFICULTY_CONFIG = {
         gunnerHoldMax: 0.62,
         archerStageMin: 2,
         archerStageMax: 4,
+        pyroHoldTime: 1.7,
     },
     hard: {
         decisionMin: 0.05,
@@ -335,6 +337,7 @@ const BOT_DIFFICULTY_CONFIG = {
         gunnerHoldMax: 0.78,
         archerStageMin: 3,
         archerStageMax: 5,
+        pyroHoldTime: 2.4,
     },
 };
 
@@ -733,6 +736,16 @@ function normalizeAngle(angle) {
     return angle;
 }
 
+function biasDirectionInward(dirX, dirY, inwardX, inwardY, inwardWeight = 0.35) {
+    const mixedX = dirX * (1 - inwardWeight) + inwardX * inwardWeight;
+    const mixedY = dirY * (1 - inwardWeight) + inwardY * inwardWeight;
+    const len = Math.hypot(mixedX, mixedY) || 1;
+    return {
+        x: mixedX / len,
+        y: mixedY / len,
+    };
+}
+
 function isTargetInsideCone(originX, originY, angle, range, halfAngle, targetX, targetY, radius = BALL_RADIUS) {
     const dx = targetX - originX;
     const dy = targetY - originY;
@@ -816,7 +829,9 @@ function shouldBotUseSpecial(player, enemy, config, angleError, distance) {
         case 'archer':
             return angleError <= config.specialTolerance && distance <= config.mediumRange;
         case 'ninja':
-            return distance <= config.mediumRange && distance >= config.closeRange * 0.7;
+            return distance <= config.mediumRange
+                && distance >= config.closeRange * 0.7
+                && (player.botDifficulty === 'easy' || player.shootCooldown <= 0);
         case 'reaper':
             return distance <= config.mediumRange;
         case 'shotgun':
@@ -841,7 +856,9 @@ function shouldBotUsePrimary(player, enemy, config, angleError, distance) {
         case 'pyro':
             return distance <= player.buildCfg.flameRange * 0.92 && angleError <= player.buildCfg.flameHalfAngle * (player.botDifficulty === 'hard' ? 0.95 : 1.05);
         case 'juggernaut':
-            return distance <= config.mediumRange;
+            return player.botDifficulty === 'easy'
+                ? distance <= config.mediumRange
+                : distance <= player.buildCfg.gravityRadius;
         default:
             return angleError <= config.shootTolerance && distance <= config.mediumRange * 1.2;
     }
@@ -858,6 +875,9 @@ function getBotInputs(player, dt) {
     state.decisionTimer -= dt;
     state.dashPulse = Math.max(0, state.dashPulse - dt);
     state.specialPulse = Math.max(0, state.specialPulse - dt);
+    state.forcePrimaryTimer = Math.max(0, state.forcePrimaryTimer - dt);
+    state.pyroHoldTime = Math.max(0, state.pyroHoldTime - dt);
+    if (state.forcePrimaryTimer <= 0) state.forcePrimaryAfterSpecial = false;
 
     const dx = enemy.x - player.x;
     const dy = enemy.y - player.y;
@@ -885,9 +905,12 @@ function getBotInputs(player, dt) {
                 }
             } else {
                 const targetStage = state.targetChargeStage;
-                const targetHold = targetStage * player.buildCfg.chargeStageTime;
-                const shouldRelease = state.shootHoldTime >= targetHold
-                    || (state.shootHoldTime >= player.buildCfg.chargeStageTime && angleError > config.shootTolerance * 1.35);
+                const targetHold = targetStage * player.buildCfg.chargeStageTime + 0.04;
+                const releaseTolerance = player.botDifficulty === 'hard'
+                    ? config.shootTolerance * 0.65
+                    : (player.botDifficulty === 'normal' ? config.shootTolerance : config.shootTolerance * 1.55);
+                const chargedEnough = state.shootHoldTime >= targetHold;
+                const shouldRelease = chargedEnough && angleError <= releaseTolerance;
                 if (shouldRelease) {
                     state.shootHoldActive = false;
                     state.shootHoldTime = 0;
@@ -896,7 +919,10 @@ function getBotInputs(player, dt) {
             }
         }
     } else if (player.build === 'pyro') {
-        if (shouldBotUsePrimary(player, enemy, config, angleError, distance)) {
+        const shouldKeepFlaming = state.pyroHoldTime > 0
+            && distance <= player.buildCfg.flameRange * 1.08
+            && angleError <= player.buildCfg.flameHalfAngle * 1.5;
+        if (shouldKeepFlaming || shouldBotUsePrimary(player, enemy, config, angleError, distance)) {
             inputs.shootDown = true;
         }
     } else if (state.shootPulse > 0) {
@@ -918,6 +944,14 @@ function getBotInputs(player, dt) {
         inputs.specialDown = true;
     }
 
+    if (player.build === 'ninja' && state.forcePrimaryAfterSpecial && player.shootCooldown <= 0) {
+        state.shootPulse = 0.08;
+        state.forcePrimaryAfterSpecial = false;
+        state.forcePrimaryTimer = 0;
+        inputs.shootDown = true;
+        return inputs;
+    }
+
     if (player.shootCooldown > 0) return inputs;
 
     if (player.build === 'gunner') {
@@ -937,6 +971,12 @@ function getBotInputs(player, dt) {
             state.targetChargeStage = Math.floor(randBetween(config.archerStageMin, config.archerStageMax + 1));
             inputs.shootDown = true;
         }
+        return inputs;
+    }
+
+    if (player.build === 'pyro' && shouldBotUsePrimary(player, enemy, config, angleError, distance) && Math.random() <= config.shotChance) {
+        state.pyroHoldTime = Math.max(state.pyroHoldTime, config.pyroHoldTime);
+        inputs.shootDown = true;
         return inputs;
     }
 
@@ -1060,6 +1100,9 @@ class Player {
             shootHoldTime: 0,
             targetShootHold: 0,
             targetChargeStage: 1,
+            pyroHoldTime: 0,
+            forcePrimaryAfterSpecial: false,
+            forcePrimaryTimer: 0,
         };
         
         // Velocity direction (normalized vector)
@@ -1125,6 +1168,10 @@ class Player {
         this.ninjaSlashTime = 0;
         this.ninjaSlashHitDealt = false;
         this.ninjaSlashBaseAngle = 0;
+        this.ninjaStrikeFxTime = 0;
+        this.ninjaStrikeFxX = 0;
+        this.ninjaStrikeFxY = 0;
+        this.ninjaStrikeFxAngle = 0;
 
         // Reaper-specific
         this.reaperAbilityTime = 0;
@@ -1181,6 +1228,7 @@ class Player {
         if (this.pyroWaveTime > 0) this.pyroWaveTime -= dt;
         if (this.juggernautPullTime > 0) this.juggernautPullTime -= dt;
         if (this.juggernautInvulnTime > 0) this.juggernautInvulnTime -= dt;
+        if (this.ninjaStrikeFxTime > 0) this.ninjaStrikeFxTime -= dt;
 
         if (this.swordAttackTime <= 0) this.swordDamageOverride = null;
         if (this.swordAbilityTime <= 0) this.swordAbilityDamageOverride = null;
@@ -1362,7 +1410,7 @@ class Player {
                 const mult = this.nextAttackDamageMult;
                 this.nextAttackDamageMult = 1.0;
                 this.swordAbilityDamageOverride = this.buildCfg.swordAbilityDamage * mult;
-                this.swordAbilityTime = 0.35; // quick burst window
+                this.swordAbilityTime = 1.5; // quick burst window
                 this.specialCooldown = this.buildCfg.abilityCooldown;
             } else if (this.build === 'archer') {
                 this.archerNextBuff = true;
@@ -1377,14 +1425,13 @@ class Player {
                     const targetY = other.y + Math.sin(behindAngle) * distFromOther;
                     const prevX = this.x;
                     const prevY = this.y;
+                    spawnSmokePoof(prevX, prevY);
                     this.x = targetX;
                     this.y = targetY;
                     this.spinAngle = Math.atan2(other.y - this.y, other.x - this.x);
-                    for (let i = 0; i < 18; i++) {
-                        const angle = Math.random() * Math.PI * 2;
-                        const speed = 70 + Math.random() * 120;
-                        const life = 0.25 + Math.random() * 0.2;
-                        particles.push(new Particle(prevX, prevY, Math.cos(angle), Math.sin(angle), '#9ca3af', speed, life));
+                    if (this.isBot && this.botDifficulty !== 'easy') {
+                        this.botState.forcePrimaryAfterSpecial = true;
+                        this.botState.forcePrimaryTimer = 0.45;
                     }
                 }
                 this.specialCooldown = this.buildCfg.abilityCooldown;
@@ -1501,6 +1548,16 @@ class Player {
                 if (inRange && inSweep) {
                     other.takeDamage(this.buildCfg.slashDamage);
                     spawnImpact(other.x, other.y, '#f8fafc');
+                    this.ninjaStrikeFxTime = 0.14;
+                    this.ninjaStrikeFxX = other.x;
+                    this.ninjaStrikeFxY = other.y;
+                    this.ninjaStrikeFxAngle = angleToEnemy;
+                    for (let i = 0; i < 14; i++) {
+                        const slashAngle = angleToEnemy + (Math.random() - 0.5) * 0.5;
+                        const speed = 120 + Math.random() * 220;
+                        const life = 0.12 + Math.random() * 0.12;
+                        particles.push(new Particle(other.x, other.y, Math.cos(slashAngle), Math.sin(slashAngle), '#f8fafc', speed, life));
+                    }
                     this.ninjaSlashHitDealt = true;
                     // Do not zero ninjaSlashTime — let the slash animation play out
                 }
@@ -1584,10 +1641,10 @@ class Player {
                 this.dirX = Math.cos(newAngle);
                 this.dirY = Math.sin(newAngle);
                 
-                // Normalize to be safe
-                const len = Math.hypot(this.dirX, this.dirY);
-                this.dirX /= len;
-                this.dirY /= len;
+                // Bias rebounds inward so players do not get trapped orbiting the wall.
+                const inwardBiased = biasDirectionInward(this.dirX, this.dirY, nx, ny, 0.1);
+                this.dirX = inwardBiased.x;
+                this.dirY = inwardBiased.y;
 
                 // Railgun ability: if opponent has boundary zap active, bouncing damages you
                 const other = this.id === 1 ? p2 : p1;
@@ -1768,7 +1825,7 @@ class Player {
         if (!fromClone) this.nextAttackDamageMult = 1.0;
         bullets.push(new Bullet(this.id, bx, by, gx, gy, this.color, {
             type: 'necroorb',
-            damage: Math.round(this.buildCfg.orbDamage * mult),
+            damage: fromClone ? 50 : Math.round(this.buildCfg.orbDamage * mult),
             speed: BULLET_SPEED * this.buildCfg.orbSpeedMult,
             radius: BULLET_RADIUS * 1.5,
             trackTargetId: this.id === 1 ? 2 : 1,
@@ -2148,28 +2205,40 @@ class Player {
                 ctx.save();
                 ctx.translate(this.x, this.y);
                 ctx.rotate(slashAngle);
-                ctx.translate(BALL_RADIUS * 0.42, 0);
+                ctx.translate(BALL_RADIUS * 0.24, 0);
                 ctx.fillStyle = '#e2e8f0';
-                drawBladePath(0);
+                ctx.beginPath();
+                ctx.moveTo(0, -bW / 2);
+                ctx.lineTo(bladeLen - kiss, -bW / 2);
+                ctx.lineTo(bladeLen, 0);
+                ctx.lineTo(bladeLen - kiss, bW / 2);
+                ctx.lineTo(0, bW / 2);
+                ctx.closePath();
                 ctx.fill();
-                drawBladePath(0);
+                ctx.beginPath();
+                ctx.moveTo(0, -bW / 2);
+                ctx.lineTo(bladeLen - kiss, -bW / 2);
+                ctx.lineTo(bladeLen, 0);
+                ctx.lineTo(bladeLen - kiss, bW / 2);
+                ctx.lineTo(0, bW / 2);
+                ctx.closePath();
                 ctx.strokeStyle = 'rgba(255,255,255,0.9)';
                 ctx.lineWidth = 1.2;
                 ctx.stroke();
                 ctx.strokeStyle = 'rgba(30,41,59,0.45)';
                 ctx.lineWidth = 0.9;
                 ctx.beginPath();
-                ctx.moveTo(-1, 0);
-                ctx.lineTo(-(bladeLen - kiss - 1), 0);
+                ctx.moveTo(1, 0);
+                ctx.lineTo(bladeLen - kiss - 1, 0);
                 ctx.stroke();
                 ctx.strokeStyle = 'rgba(255,255,255,0.6)';
                 ctx.lineWidth = 0.85;
                 ctx.beginPath();
                 ctx.moveTo(0, -bW / 2 + 0.5);
-                ctx.lineTo(-(bladeLen - kiss - 2), -bW / 2 + 0.9);
+                ctx.lineTo(bladeLen - kiss - 2, -bW / 2 + 0.9);
                 ctx.stroke();
                 ctx.fillStyle = '#92400e';
-                ctx.fillRect(-3.5, -3, 3.5, 6);
+                ctx.fillRect(-3.5, -3, 4, 6);
                 ctx.fillStyle = '#0f172a';
                 ctx.strokeStyle = '#64748b';
                 ctx.lineWidth = 1;
@@ -2178,11 +2247,11 @@ class Player {
                 ctx.fill();
                 ctx.stroke();
                 ctx.fillStyle = '#111827';
-                ctx.fillRect(-15, -2.9, 15, 5.8);
+                ctx.fillRect(-16, -2.9, 16, 5.8);
                 ctx.strokeStyle = 'rgba(55,65,81,0.95)';
                 ctx.lineWidth = 0.8;
                 for (let i = 0; i < 5; i++) {
-                    const t = -13 + i * 2.6;
+                    const t = -14 + i * 2.7;
                     ctx.beginPath();
                     ctx.moveTo(t, -2.4);
                     ctx.lineTo(t + 1.4, 0);
@@ -2191,7 +2260,7 @@ class Player {
                 }
                 ctx.fillStyle = '#020617';
                 ctx.beginPath();
-                ctx.arc(-16.2, 0, 2.7, 0, Math.PI * 2);
+                ctx.arc(-17.4, 0, 2.7, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.strokeStyle = 'rgba(148,163,184,0.55)';
                 ctx.lineWidth = 0.75;
@@ -2261,6 +2330,31 @@ class Player {
                 ctx.restore();
                 ctx.shadowBlur = 0;
                 ctx.globalAlpha = 1;
+            }
+
+            if (this.ninjaStrikeFxTime > 0) {
+                const fxAlpha = Math.max(0, this.ninjaStrikeFxTime / 0.14);
+                const fxLen = 78;
+                const fxOffsetX = Math.cos(this.ninjaStrikeFxAngle + Math.PI / 2) * fxLen * 0.34;
+                const fxOffsetY = Math.sin(this.ninjaStrikeFxAngle + Math.PI / 2) * fxLen * 0.34;
+                ctx.save();
+                ctx.strokeStyle = `rgba(248,250,252,${0.95 * fxAlpha})`;
+                ctx.lineWidth = 10;
+                ctx.lineCap = 'round';
+                ctx.shadowColor = '#f8fafc';
+                ctx.shadowBlur = 18;
+                ctx.beginPath();
+                ctx.moveTo(this.ninjaStrikeFxX - fxOffsetX, this.ninjaStrikeFxY - fxOffsetY);
+                ctx.lineTo(this.ninjaStrikeFxX + fxOffsetX, this.ninjaStrikeFxY + fxOffsetY);
+                ctx.stroke();
+
+                ctx.strokeStyle = `rgba(148,163,184,${0.55 * fxAlpha})`;
+                ctx.lineWidth = 4;
+                ctx.beginPath();
+                ctx.moveTo(this.ninjaStrikeFxX - fxOffsetX * 0.72, this.ninjaStrikeFxY - fxOffsetY * 0.72);
+                ctx.lineTo(this.ninjaStrikeFxX + fxOffsetX * 0.95, this.ninjaStrikeFxY + fxOffsetY * 0.95);
+                ctx.stroke();
+                ctx.restore();
             }
         } else if (this.build === 'reaper') {
             const hasThrownScythe = bullets.some(b => b.ownerId === this.id && b.type === 'scythe' && b.active);
@@ -3129,6 +3223,7 @@ class Clone {
         this.radius = BALL_RADIUS * 0.7;
         this.hp = 1;
         this.fireTimer = BUILDS.necromancer.shootCooldown;
+        this.lifeTime = 30;
         const a = Math.random() * Math.PI * 2;
         this.dirX = Math.cos(a);
         this.dirY = Math.sin(a);
@@ -3138,6 +3233,12 @@ class Clone {
 
     update(dt) {
         if (!this.active) return;
+        this.lifeTime -= dt;
+        if (this.lifeTime <= 0) {
+            this.active = false;
+            spawnImpact(this.x, this.y, this.color);
+            return;
+        }
         this.x += this.dirX * this.speed * dt;
         this.y += this.dirY * this.speed * dt;
 
@@ -3149,9 +3250,9 @@ class Clone {
             if (dot < 0) {
                 this.dirX = this.dirX - 2 * dot * nx;
                 this.dirY = this.dirY - 2 * dot * ny;
-                const len = Math.hypot(this.dirX, this.dirY) || 1;
-                this.dirX /= len;
-                this.dirY /= len;
+                const inwardBiased = biasDirectionInward(this.dirX, this.dirY, nx, ny, 0.08);
+                this.dirX = inwardBiased.x;
+                this.dirY = inwardBiased.y;
             }
             const pushIn = (distToCenter + this.radius) - ARENA_RADIUS;
             this.x += nx * pushIn;
@@ -3347,6 +3448,16 @@ function spawnImpact(x, y, color) {
     }
     // Trigger screen shake
     screenShake = { x: 0, y: 0, duration: 0.15, intensity: 13 };
+}
+
+function spawnSmokePoof(x, y) {
+    for (let i = 0; i < 96; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 80 + Math.random() * 260;
+        const life = 0.6 + Math.random() * 0.45;
+        const smokeColor = Math.random() > 0.45 ? '#94a3b8' : '#cbd5e1';
+        particles.push(new Particle(x, y, Math.cos(angle), Math.sin(angle), smokeColor, speed, life));
+    }
 }
 
 function spawnDeathExplosion(x, y, color) {
@@ -3554,12 +3665,16 @@ function endGame(winnerId) {
 }
 
 function drawArena() {
+    const scale = canvas.width / 800;
+    const outerBorderInset = 8 * scale;
+    const outerBorderWidth = 8 * scale;
+
     // Outer border
     ctx.beginPath();
-    ctx.arc(CENTER_X, CENTER_Y, ARENA_RADIUS + 10, 0, Math.PI * 2);
+    ctx.arc(CENTER_X, CENTER_Y, ARENA_RADIUS + outerBorderInset, 0, Math.PI * 2);
     ctx.fillStyle = '#1e293b';
     ctx.fill();
-    ctx.lineWidth = 10;
+    ctx.lineWidth = outerBorderWidth;
     ctx.strokeStyle = '#334155';
     ctx.stroke();
     
@@ -3707,24 +3822,24 @@ function resizeCanvas() {
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
     
-    // Use 80% of the smaller viewport dimension to ensure it fits
-    let canvasSize = Math.min(viewportWidth * 0.8, viewportHeight * 0.8);
+    // Keep the frame closer to the arena border
+    let canvasSize = Math.min(viewportWidth * 0.88, viewportHeight * 0.88);
     
     // Ensure minimum size for gameplay
-    canvasSize = Math.max(canvasSize, 400);
+    canvasSize = Math.max(canvasSize, 440);
     
     // For mobile, allow it to be larger if in landscape
     if (viewportWidth > viewportHeight && viewportWidth <= 768) {
-        canvasSize = Math.min(viewportWidth * 0.9, viewportHeight * 0.9);
+        canvasSize = Math.min(viewportWidth * 0.94, viewportHeight * 0.94);
     }
     
     canvas.width = canvasSize;
     canvas.height = canvasSize;
     
     // Update constants based on new canvas size
-    // Original: canvas 800x800, arena radius 380 (ratio: 380/800 = 0.475)
+    // Baseline: canvas 800x800, arena radius 388
     const scale = canvasSize / 800;
-    ARENA_RADIUS = 380 * scale;
+    ARENA_RADIUS = 388 * scale;
     CENTER_X = canvas.width / 2;
     CENTER_Y = canvas.height / 2;
     
