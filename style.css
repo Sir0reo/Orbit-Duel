@@ -411,6 +411,10 @@ canvas {
     font-weight: 700;
 }
 
+#online-server-url-input {
+    text-transform: none;
+}
+
 .online-panel-btn {
     padding: 0 18px;
     cursor: pointer;

@@ -25,6 +25,7 @@ const localGameBtn = document.getElementById('local-game-btn');
 const onlineGameBtn = document.getElementById('online-game-btn');
 const botsGameBtn = document.getElementById('bots-game-btn');
 const onlinePanel = document.getElementById('online-panel');
+const onlineServerUrlInput = document.getElementById('online-server-url-input');
 const hostRoomBtn = document.getElementById('host-room-btn');
 const joinRoomBtn = document.getElementById('join-room-btn');
 const joinRoomCodeInput = document.getElementById('join-room-code-input');
@@ -325,6 +326,7 @@ let roundEndActive = false;
 let koRevealTimeout = null;
 let rematchRevealTimeout = null;
 let socket = null;
+let socketServerUrl = '';
 let roomCode = '';
 let onlineLocalPlayerId = 1;
 let onlineIsHost = false;
@@ -336,6 +338,7 @@ const onlineInputState = {
     2: { dashDown: false, shootDown: false, specialDown: false },
 };
 const ONLINE_STATE_INTERVAL_MS = 1000 / 30;
+const ONLINE_SERVER_URL_STORAGE_KEY = 'orbit-duel-server-url';
 const secretCheatState = {
     '.': [],
     ',': [],
@@ -371,12 +374,40 @@ function setOnlineControlsDisabled(disabled) {
     if (hostRoomBtn) hostRoomBtn.disabled = disabled;
     if (joinRoomBtn) joinRoomBtn.disabled = disabled;
     if (joinRoomCodeInput) joinRoomCodeInput.disabled = disabled;
+    if (onlineServerUrlInput) onlineServerUrlInput.disabled = disabled;
+}
+
+function getDefaultOnlineServerUrl() {
+    const saved = localStorage.getItem(ONLINE_SERVER_URL_STORAGE_KEY);
+    if (saved) return saved;
+    return 'https://orbit-server-production-4511.up.railway.app';
+}
+
+function normalizeOnlineServerUrl(rawUrl) {
+    const trimmed = String(rawUrl || '').trim();
+    if (!trimmed) return '';
+    try {
+        return new URL(trimmed).origin;
+    } catch (_error) {
+        return '';
+    }
+}
+
+function getOnlineServerUrl() {
+    const normalized = normalizeOnlineServerUrl(onlineServerUrlInput?.value || getDefaultOnlineServerUrl());
+    if (!normalized) return '';
+    localStorage.setItem(ONLINE_SERVER_URL_STORAGE_KEY, normalized);
+    if (onlineServerUrlInput) onlineServerUrlInput.value = normalized;
+    return normalized;
 }
 
 function showOnlinePanel() {
     if (!onlinePanel) return;
     onlinePanel.classList.remove('hidden');
-    updateOnlineStatus('Host a room to generate a 6-character code, or join with a friend\'s code.');
+    if (onlineServerUrlInput) {
+        onlineServerUrlInput.value = getDefaultOnlineServerUrl();
+    }
+    updateOnlineStatus('Host a room to generate a 6-character code, or join with a friend\'s code. If you are using GitHub Pages, this must point at your Railway server.');
 }
 
 function hideOnlinePanel() {
@@ -414,11 +445,24 @@ function updateOnlineMenuState() {
 }
 
 function initializeSocketConnection() {
-    if (socket || typeof io === 'undefined') return socket;
-    socket = io("https://orbit-server-production-4511.up.railway.app");
+    if (typeof io === 'undefined') return null;
+    const serverUrl = getOnlineServerUrl();
+    if (!serverUrl) {
+        updateOnlineStatus('Enter a valid Railway server URL first.');
+        return null;
+    }
+    if (socket && socketServerUrl === serverUrl) return socket;
+    if (socket) {
+        socket.disconnect();
+        socket = null;
+    }
+    socketServerUrl = serverUrl;
+    socket = io(serverUrl, {
+        transports: ['websocket', 'polling'],
+    });
 
     socket.on('connect_error', () => {
-        updateOnlineStatus('Unable to reach the online server right now.');
+        updateOnlineStatus(`Unable to reach the online server at ${socketServerUrl}.`);
         setOnlineControlsDisabled(false);
     });
 
@@ -926,6 +970,14 @@ joinRoomCodeInput?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
         e.preventDefault();
         joinRoomBtn?.click();
+    }
+});
+
+onlineServerUrlInput?.addEventListener('blur', () => {
+    const normalized = normalizeOnlineServerUrl(onlineServerUrlInput.value);
+    if (normalized) {
+        onlineServerUrlInput.value = normalized;
+        localStorage.setItem(ONLINE_SERVER_URL_STORAGE_KEY, normalized);
     }
 });
 

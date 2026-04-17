@@ -84,6 +84,10 @@
                         </div>
 
                         <div class="online-panel-actions">
+                            <input id="online-server-url-input" class="room-code-input" type="url" placeholder="https://your-server.up.railway.app" autocomplete="off" spellcheck="false">
+                        </div>
+
+                        <div class="online-panel-actions">
                             <button id="host-room-btn" class="online-panel-btn online-panel-btn-primary" type="button">Host Room</button>
                             <div id="room-code-display" class="room-code-display">------</div>
                         </div>
@@ -191,7 +195,7 @@
         </div>
     </div>
     
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
     <script src="script.js"></script>
 </body>
 </html>
