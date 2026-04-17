@@ -69,6 +69,18 @@ const PYRO_IGNITE_DELAY = 0.12;
 const PYRO_BURN_DAMAGE_PER_SEC = 10;
 const JUGGERNAUT_COLLISION_DAMAGE = 50;
 const JUGGERNAUT_COLLISION_COOLDOWN = 0.35;
+const TRAPPER_MINE_DAMAGE = 150;
+const TRAPPER_MAX_MINES = 3;
+const TRAPPER_MINE_RADIUS = 8;
+const TRAPPER_BLAST_RADIUS = 56;
+const TRAPPER_TRIGGER_DELAY = 0.75;
+const GAMBLER_CARD_MIN_DAMAGE = 50;
+const GAMBLER_CARD_MAX_DAMAGE = 150;
+const TRAPPER_LINK_DAMAGE = 50;
+const TRAPPER_LINK_DURATION = 5.0;
+const TRAPPER_LINK_SLOW_DURATION = 0;
+const GAMBLER_SLOW_MULT = 1 / 3;
+const GAMBLER_SLOW_DURATION = 5.0;
 
 /** Ninja star follow-up slash */
 const NINJA_SLASH_DURATION = 0.33;
@@ -258,6 +270,29 @@ const BUILDS = {
         gravityRadius: 170,
         gravityPullStrength: 95,
         invulnDuration: 1.0,
+    },
+    trapper: {
+        name: 'Trapper',
+        maxHp: 1000,
+        shootCooldown: 2.5,
+        abilityCooldown: 20.0,
+        abilityStartsOnCooldown: true,
+        mineDamage: TRAPPER_MINE_DAMAGE,
+        maxMines: TRAPPER_MAX_MINES,
+        mineRadius: TRAPPER_MINE_RADIUS,
+        blastRadius: TRAPPER_BLAST_RADIUS,
+        triggerDelay: TRAPPER_TRIGGER_DELAY,
+    },
+    gambler: {
+        name: 'Gambler',
+        maxHp: 1000,
+        shootCooldown: 3.0,
+        abilityCooldown: 25.0,
+        abilityStartsOnCooldown: true,
+        cardMinDamage: GAMBLER_CARD_MIN_DAMAGE,
+        cardMaxDamage: GAMBLER_CARD_MAX_DAMAGE,
+        cardBounces: 2,
+        tripleShotSpreadDeg: 20,
     }
 };
 
@@ -401,6 +436,18 @@ const BUILD_MENU_INFO = {
         primary: 'Activates a short gravity field that weakly pulls the opponent closer without direct damage.',
         ability: 'Becomes immobile and invulnerable for a brief window while still threatening collision damage.',
         statValues: { hp: 1500, damage: 50, primaryCd: 4.0, abilityCd: 25.0 }
+    },
+    trapper: {
+        build: 'prediction merchant',
+        primary: 'Drops a proximity mine at the current position. Up to 3 mines can exist at once, and placing a fourth removes the oldest.',
+        ability: 'Detonates all active mines at once and leaves electric links between their positions for 5 seconds.',
+        statValues: { hp: 1000, damage: 150, primaryCd: 1.5, abilityCd: 30.0 }
+    },
+    gambler: {
+        build: 'rng goblin',
+        primary: 'Throws a spinning poker card that bounces off the arena border twice. Every card rolls random damage.',
+        ability: 'Triggers one of five random outcomes: heal, enemy slow, self damage, big card, or triple shot.',
+        statValues: { hp: 1000, damage: 150, primaryCd: 2.0, abilityCd: 25.0 }
     },
 };
 
@@ -842,6 +889,10 @@ function shouldBotUseSpecial(player, enemy, config, angleError, distance) {
             return summons.filter(s => s.active && s.ownerId === player.id).length < player.buildCfg.cloneCount;
         case 'juggernaut':
             return distance <= config.closeRange;
+        case 'trapper':
+            return summons.some(s => s.active && s.ownerId === player.id && s.type === 'trapmine');
+        case 'gambler':
+            return distance <= config.mediumRange;
         default:
             return false;
     }
@@ -849,6 +900,8 @@ function shouldBotUseSpecial(player, enemy, config, angleError, distance) {
 
 function shouldBotUsePrimary(player, enemy, config, angleError, distance) {
     switch (player.build) {
+        case 'trapper':
+            return distance <= config.mediumRange;
         case 'swordsman':
             return distance <= config.closeRange;
         case 'shotgun':
@@ -859,6 +912,8 @@ function shouldBotUsePrimary(player, enemy, config, angleError, distance) {
             return player.botDifficulty === 'easy'
                 ? distance <= config.mediumRange
                 : distance <= player.buildCfg.gravityRadius;
+        case 'gambler':
+            return angleError <= config.shootTolerance * 1.25 && distance <= config.mediumRange * 1.2;
         default:
             return angleError <= config.shootTolerance && distance <= config.mediumRange * 1.2;
     }
@@ -1203,6 +1258,11 @@ class Player {
         this.pyroWaveTime = 0;
         this.pyroWaveRadius = 0;
         this.pyroWaveHit = false;
+        this.gamblerBigCardReady = false;
+        this.gamblerTripleShotReady = false;
+        this.gamblerHealTime = 0;
+        this.gamblerHealRate = 0;
+        this.gamblerShockTime = 0;
 
         // Juggernaut
         this.juggernautPullTime = 0;
@@ -1229,6 +1289,8 @@ class Player {
         if (this.juggernautPullTime > 0) this.juggernautPullTime -= dt;
         if (this.juggernautInvulnTime > 0) this.juggernautInvulnTime -= dt;
         if (this.ninjaStrikeFxTime > 0) this.ninjaStrikeFxTime -= dt;
+        if (this.gamblerHealTime > 0) this.gamblerHealTime -= dt;
+        if (this.gamblerShockTime > 0) this.gamblerShockTime -= dt;
 
         if (this.swordAttackTime <= 0) this.swordDamageOverride = null;
         if (this.swordAbilityTime <= 0) this.swordAbilityDamageOverride = null;
@@ -1249,6 +1311,9 @@ class Player {
 
         if (this.burnTime > 0) {
             this.takeDamage(this.burnDamagePerSec * dt);
+        }
+        if (this.gamblerHealTime > 0) {
+            this.heal(this.gamblerHealRate * dt);
         }
         if (this.pullTowardTime > 0 && this.pullTargetId) {
             const source = this.pullTargetId === 1 ? p1 : p2;
@@ -1394,6 +1459,16 @@ class Player {
                 this.juggernautPullTime = this.buildCfg.gravityDuration;
                 this.shootCooldown = this.buildCfg.shootCooldown * shootCdMult;
             }
+        } else if (this.build === 'trapper') {
+            if (shootDown && !this._shootWasDown && this.shootCooldown <= 0) {
+                this.placeTrapMine();
+                this.shootCooldown = this.buildCfg.shootCooldown * shootCdMult;
+            }
+        } else if (this.build === 'gambler') {
+            if (shootDown && !this._shootWasDown && this.shootCooldown <= 0) {
+                this.fireGamblerShot();
+                this.shootCooldown = this.buildCfg.shootCooldown * shootCdMult;
+            }
         }
 
         // Ability per build (edge-triggered)
@@ -1456,6 +1531,12 @@ class Player {
                 this.specialCooldown = this.buildCfg.abilityCooldown;
             } else if (this.build === 'juggernaut') {
                 this.juggernautInvulnTime = this.buildCfg.invulnDuration;
+                this.specialCooldown = this.buildCfg.abilityCooldown;
+            } else if (this.build === 'trapper') {
+                this.detonateTrapMines();
+                this.specialCooldown = this.buildCfg.abilityCooldown;
+            } else if (this.build === 'gambler') {
+                this.rollGamblerOutcome();
                 this.specialCooldown = this.buildCfg.abilityCooldown;
             }
         }
@@ -1839,6 +1920,86 @@ class Player {
         for (let i = 0; i < this.buildCfg.cloneCount; i++) {
             const side = i === 0 ? -1 : 1;
             summons.push(new Clone(this.id, this.x + side * 58, this.y + 36, this.color));
+        }
+    }
+
+    placeTrapMine() {
+        const ownedMines = summons.filter(s => s.active && s.ownerId === this.id && s.type === 'trapmine');
+        if (ownedMines.length >= this.buildCfg.maxMines) {
+            ownedMines.sort((a, b) => a.createdAt - b.createdAt);
+            ownedMines[0].active = false;
+        }
+        const damage = Math.round(this.buildCfg.mineDamage * this.nextAttackDamageMult);
+        this.nextAttackDamageMult = 1.0;
+        summons.push(new TrapMine(this.id, this.x, this.y, this.color, this.buildCfg, damage));
+    }
+
+    detonateTrapMines() {
+        const mines = summons.filter(s => s.active && s.ownerId === this.id && s.type === 'trapmine');
+        const points = mines.map(m => ({ x: m.x, y: m.y }));
+        mines.forEach(mine => mine.remoteDetonate());
+        if (points.length >= 2) {
+            for (let i = 0; i < points.length; i++) {
+                for (let j = i + 1; j < points.length; j++) {
+                    summons.push(new TrapLink(this.id, points[i].x, points[i].y, points[j].x, points[j].y, this.color));
+                }
+            }
+        }
+    }
+
+    fireGamblerCard(angleOffset = 0, damageMult = 1, scaleMult = 1, attackMult = 1) {
+        const angle = this.spinAngle + angleOffset;
+        const gx = Math.cos(angle);
+        const gy = Math.sin(angle);
+        const bx = this.x + gx * (BALL_RADIUS + 7);
+        const by = this.y + gy * (BALL_RADIUS + 7);
+        const randomDamage = randBetween(this.buildCfg.cardMinDamage, this.buildCfg.cardMaxDamage);
+        const damage = Math.round(randomDamage * damageMult * attackMult);
+        bullets.push(new Bullet(this.id, bx, by, gx, gy, this.color, {
+            type: 'gamblercard',
+            damage,
+            speed: BULLET_SPEED * 0.96,
+            radius: BULLET_RADIUS * 1.2 * scaleMult,
+            maxBounces: this.buildCfg.cardBounces,
+            scale: scaleMult,
+        }));
+    }
+
+    fireGamblerShot() {
+        const spread = this.buildCfg.tripleShotSpreadDeg * Math.PI / 180;
+        const scaleMult = this.gamblerBigCardReady ? 3 : 1;
+        const damageMult = this.gamblerBigCardReady ? 2 : 1;
+        const offsets = this.gamblerTripleShotReady ? [0, -spread, spread] : [0];
+        const attackMult = this.nextAttackDamageMult;
+        this.nextAttackDamageMult = 1.0;
+        offsets.forEach(offset => {
+            this.fireGamblerCard(offset, damageMult, scaleMult, attackMult);
+        });
+        this.gamblerBigCardReady = false;
+        this.gamblerTripleShotReady = false;
+    }
+
+    rollGamblerOutcome() {
+        const other = this.id === 1 ? p2 : p1;
+        const roll = Math.floor(Math.random() * 5);
+        if (roll === 0) {
+            this.gamblerHealTime = 2.5;
+            this.gamblerHealRate = 40;
+            spawnImpact(this.x, this.y, '#34d399');
+        } else if (roll === 1 && other) {
+            other.statusSlowTime = GAMBLER_SLOW_DURATION;
+            other.statusSlowMult = GAMBLER_SLOW_MULT;
+            spawnImpact(other.x, other.y, '#94a3b8');
+        } else if (roll === 2) {
+            this.gamblerShockTime = 0.35;
+            this.takeDamage(50);
+            spawnImpact(this.x, this.y, '#f87171');
+        } else if (roll === 3) {
+            this.gamblerBigCardReady = true;
+            spawnImpact(this.x, this.y, '#fbbf24');
+        } else {
+            this.gamblerTripleShotReady = true;
+            spawnImpact(this.x, this.y, '#c084fc');
         }
     }
 
@@ -2512,6 +2673,51 @@ class Player {
             ctx.setLineDash([8, 12]);
             ctx.stroke();
             ctx.setLineDash([]);
+        } else if (this.build === 'trapper') {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.spinAngle);
+            ctx.fillStyle = '#cbd5e1';
+            roundRectPath(ctx, -4, -7, 26, 14, 4);
+            ctx.fill();
+            ctx.strokeStyle = '#f59e0b';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(16, 0, 4, 0, Math.PI * 2);
+            ctx.fillStyle = '#f59e0b';
+            ctx.fill();
+            ctx.restore();
+        } else if (this.build === 'gambler') {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.spinAngle);
+            const fanW = 15;
+            const fanH = 22;
+            [-0.18, 0, 0.18].forEach((offset, index) => {
+                ctx.save();
+                ctx.translate(8 + index * 1.5, 0);
+                ctx.rotate(offset);
+                roundRectPath(ctx, -fanW / 2, -fanH / 2, fanW, fanH, 3);
+                ctx.fillStyle = '#f8fafc';
+                ctx.fill();
+                ctx.strokeStyle = index === 1 ? '#ef4444' : '#0f172a';
+                ctx.lineWidth = 1.2;
+                ctx.stroke();
+                ctx.restore();
+            });
+            ctx.restore();
+
+            const aimX = this.x + Math.cos(this.spinAngle) * (BALL_RADIUS * 1.5);
+            const aimY = this.y + Math.sin(this.spinAngle) * (BALL_RADIUS * 1.5);
+            ctx.beginPath();
+            ctx.moveTo(aimX, aimY);
+            ctx.lineTo(this.x + Math.cos(this.spinAngle) * ARENA_RADIUS * 1.2, this.y + Math.sin(this.spinAngle) * ARENA_RADIUS * 1.2);
+            ctx.strokeStyle = this.color + '66';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([10, 14]);
+            ctx.stroke();
+            ctx.setLineDash([]);
         } else if (this.build === 'juggernaut') {
             if (this.juggernautInvulnTime > 0) {
                 ctx.save();
@@ -2544,6 +2750,76 @@ class Player {
             ctx.arc(this.x, this.y, BALL_RADIUS + 12, 0, Math.PI * 2);
             ctx.stroke();
             ctx.restore();
+        }
+
+        if (this.statusSlowTime > 0) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(148,163,184,0.52)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, BALL_RADIUS + 10, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        if (this.gamblerHealTime > 0) {
+            ctx.save();
+            const pulse = Math.sin(performance.now() * 0.016) * 2;
+            ctx.strokeStyle = 'rgba(34,197,94,0.75)';
+            ctx.lineWidth = 4;
+            ctx.shadowColor = '#22c55e';
+            ctx.shadowBlur = 14;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, BALL_RADIUS + 12 + pulse, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        if (this.gamblerShockTime > 0) {
+            const alpha = Math.max(0, this.gamblerShockTime / 0.35);
+            ctx.save();
+            ctx.strokeStyle = `rgba(248,250,252,${alpha})`;
+            ctx.lineWidth = 4;
+            ctx.shadowColor = '#f8fafc';
+            ctx.shadowBlur = 14;
+            ctx.beginPath();
+            ctx.moveTo(this.x - 6, this.y - BALL_RADIUS - 34);
+            ctx.lineTo(this.x + 6, this.y - BALL_RADIUS - 12);
+            ctx.lineTo(this.x - 2, this.y - BALL_RADIUS - 12);
+            ctx.lineTo(this.x + 7, this.y + 2);
+            ctx.lineTo(this.x - 5, this.y + 20);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        if (this.gamblerBigCardReady || this.gamblerTripleShotReady) {
+            const baseY = this.y - BALL_RADIUS - 34;
+            if (this.gamblerBigCardReady) {
+                ctx.save();
+                ctx.translate(this.x, baseY);
+                roundRectPath(ctx, -11, -15, 22, 30, 4);
+                ctx.fillStyle = '#f8fafc';
+                ctx.fill();
+                ctx.strokeStyle = '#f59e0b';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.fillStyle = '#f59e0b';
+                ctx.fillRect(-6, -6, 12, 12);
+                ctx.restore();
+            }
+            if (this.gamblerTripleShotReady) {
+                ctx.save();
+                ctx.translate(this.x + (this.gamblerBigCardReady ? 20 : 0), baseY);
+                [-10, 0, 10].forEach(offset => {
+                    roundRectPath(ctx, offset - 5, -10, 10, 16, 3);
+                    ctx.fillStyle = '#f8fafc';
+                    ctx.fill();
+                    ctx.strokeStyle = '#c084fc';
+                    ctx.lineWidth = 1.4;
+                    ctx.stroke();
+                });
+                ctx.restore();
+            }
         }
 
         if (this.burnTime > 0) {
@@ -2672,6 +2948,21 @@ function rayCircleExitT(px, py, dx, dy, cx, cy, radius) {
     return Math.max(t1, t2, 0);
 }
 
+function roundRectPath(ctx, x, y, width, height, radius) {
+    const r = Math.max(0, Math.min(radius, width / 2, height / 2));
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + width - r, y);
+    ctx.arcTo(x + width, y, x + width, y + r, r);
+    ctx.lineTo(x + width, y + height - r);
+    ctx.arcTo(x + width, y + height, x + width - r, y + height, r);
+    ctx.lineTo(x + r, y + height);
+    ctx.arcTo(x, y + height, x, y + height - r, r);
+    ctx.lineTo(x, y + r);
+    ctx.arcTo(x, y, x + r, y, r);
+    ctx.closePath();
+}
+
 class Bullet {
     constructor(ownerId, x, y, dirX, dirY, color, opts = {}) {
         this.ownerId = ownerId;
@@ -2740,6 +3031,9 @@ class Bullet {
         }
         if (this.isNinjaStar) {
             this.ninjaStarRotation += dt * 15; // spin at 15 radians per second
+        }
+        if (this.type === 'gamblercard') {
+            this.cardRotation = (this.cardRotation || 0) + dt * 16;
         }
         if (this.type === 'necroorb' && this.trackTargetId) {
             const target = getNecroOrbTarget(this.ownerId, this.x, this.y) || (this.trackTargetId === 1 ? p1 : p2);
@@ -3140,6 +3434,23 @@ class Bullet {
             ctx.strokeStyle = '#f5f3ff';
             ctx.lineWidth = 1.5;
             ctx.stroke();
+        } else if (this.type === 'gamblercard') {
+            ctx.save();
+            ctx.rotate(this.cardRotation || 0);
+            const cardW = 22 * this.scale;
+            const cardH = 30 * this.scale;
+            roundRectPath(ctx, -cardW / 2, -cardH / 2, cardW, cardH, 4 * this.scale);
+            ctx.fillStyle = '#f8fafc';
+            ctx.fill();
+            ctx.strokeStyle = this.color;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.fillStyle = this.color;
+            ctx.fillRect(-cardW * 0.26, -cardH * 0.22, cardW * 0.52, cardH * 0.44);
+            ctx.strokeStyle = 'rgba(15,23,42,0.4)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(-cardW * 0.22, -cardH * 0.18, cardW * 0.44, cardH * 0.36);
+            ctx.restore();
         } else if (this.type === 'shotgun') {
             ctx.fillStyle = '#fde68a';
             ctx.beginPath();
@@ -3294,6 +3605,172 @@ class Clone {
         ctx.strokeStyle = 'rgba(167,139,250,0.4)';
         ctx.stroke();
         ctx.globalAlpha = 1;
+        ctx.restore();
+    }
+}
+
+class TrapMine {
+    constructor(ownerId, x, y, color, cfg, damage = cfg.mineDamage) {
+        this.type = 'trapmine';
+        this.ownerId = ownerId;
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.radius = cfg.mineRadius;
+        this.blastRadius = cfg.blastRadius;
+        this.damage = damage;
+        this.triggerDelay = cfg.triggerDelay;
+        this.flashTimer = 0;
+        this.triggered = false;
+        this.active = true;
+        this.createdAt = performance.now();
+    }
+
+    update(dt) {
+        if (!this.active) return;
+        const enemy = this.ownerId === 1 ? p2 : p1;
+        if (!enemy || enemy.isEliminated) return;
+
+        const dist = Math.hypot(enemy.x - this.x, enemy.y - this.y);
+        if (dist <= BALL_RADIUS + this.radius) {
+            this.explode(true);
+            return;
+        }
+
+        if (!this.triggered && dist <= BALL_RADIUS + this.blastRadius) {
+            this.triggered = true;
+            this.flashTimer = this.triggerDelay;
+        }
+
+        if (this.triggered) {
+            this.flashTimer -= dt;
+            if (this.flashTimer <= 0) {
+                const stillInsideBlast = dist <= BALL_RADIUS + this.blastRadius;
+                this.explode(stillInsideBlast);
+            }
+        }
+    }
+
+    explode(shouldDamage) {
+        if (!this.active) return;
+        this.active = false;
+        const enemy = this.ownerId === 1 ? p2 : p1;
+        if (shouldDamage && enemy && !enemy.isEliminated) {
+            const dist = Math.hypot(enemy.x - this.x, enemy.y - this.y);
+            if (dist <= BALL_RADIUS + this.blastRadius) {
+                enemy.takeDamage(this.damage);
+            }
+        }
+        spawnImpact(this.x, this.y, this.color);
+        spawnImpact(this.x + 6, this.y - 4, '#f8fafc');
+    }
+
+    remoteDetonate() {
+        this.explode(true);
+    }
+
+    hit() {
+        const enemy = this.ownerId === 1 ? p2 : p1;
+        const shouldDamage = !!(enemy && !enemy.isEliminated && Math.hypot(enemy.x - this.x, enemy.y - this.y) <= BALL_RADIUS + this.blastRadius);
+        this.explode(shouldDamage);
+    }
+
+    draw(ctx) {
+        if (!this.active) return;
+        const blinkOn = this.triggered ? (Math.floor((this.triggerDelay - this.flashTimer) / (this.triggerDelay / 3)) % 2 === 0) : false;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.blastRadius, 0, Math.PI * 2);
+        ctx.fillStyle = blinkOn ? 'rgba(248,113,113,0.18)' : 'rgba(248,250,252,0.08)';
+        ctx.fill();
+        ctx.strokeStyle = blinkOn ? 'rgba(248,113,113,0.45)' : 'rgba(241,245,249,0.12)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = blinkOn ? '#f87171' : '#f8fafc';
+        ctx.fill();
+        ctx.strokeStyle = this.color;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+    }
+}
+
+class TrapLink {
+    constructor(ownerId, x1, y1, x2, y2, color) {
+        this.type = 'traplink';
+        this.ownerId = ownerId;
+        this.x1 = x1;
+        this.y1 = y1;
+        this.x2 = x2;
+        this.y2 = y2;
+        this.x = (x1 + x2) / 2;
+        this.y = (y1 + y2) / 2;
+        this.radius = 0;
+        this.color = color;
+        this.active = true;
+        this.lifeTime = TRAPPER_LINK_DURATION;
+        this.hitCooldown = 0;
+    }
+
+    update(dt) {
+        if (!this.active) return;
+        this.lifeTime -= dt;
+        this.hitCooldown = Math.max(0, this.hitCooldown - dt);
+        if (this.lifeTime <= 0) {
+            this.active = false;
+            return;
+        }
+
+        const enemy = this.ownerId === 1 ? p2 : p1;
+        if (!enemy || enemy.isEliminated || this.hitCooldown > 0) return;
+
+        if (segmentHitsCircle(this.x1, this.y1, this.x2, this.y2, enemy.x, enemy.y, BALL_RADIUS)) {
+            enemy.takeDamage(TRAPPER_LINK_DAMAGE);
+            enemy.statusSlowTime = TRAPPER_LINK_SLOW_DURATION;
+            enemy.statusSlowMult = 0;
+            this.hitCooldown = 1.0;
+            spawnImpact(enemy.x, enemy.y, '#93c5fd');
+        }
+    }
+
+    hit() {
+        // Link is a lingering field, not a destructible object.
+    }
+
+    draw(ctx) {
+        if (!this.active) return;
+        const pulse = 0.55 + Math.sin(performance.now() * 0.02) * 0.2;
+        ctx.save();
+        ctx.strokeStyle = `rgba(147,197,253,${0.65 * pulse})`;
+        ctx.lineWidth = 4;
+        ctx.shadowColor = '#93c5fd';
+        ctx.shadowBlur = 12;
+        ctx.beginPath();
+        ctx.moveTo(this.x1, this.y1);
+        ctx.lineTo(this.x2, this.y2);
+        ctx.stroke();
+
+        ctx.strokeStyle = `rgba(241,245,249,${0.8 * pulse})`;
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(this.x1, this.y1);
+        const segments = 10;
+        for (let i = 1; i <= segments; i++) {
+            const t = i / segments;
+            const px = this.x1 + (this.x2 - this.x1) * t;
+            const py = this.y1 + (this.y2 - this.y1) * t + Math.sin(performance.now() * 0.03 + i) * 4;
+            ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(this.x1, this.y1, 5, 0, Math.PI * 2);
+        ctx.arc(this.x2, this.y2, 5, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(191,219,254,${0.75 * pulse})`;
+        ctx.fill();
         ctx.restore();
     }
 }
