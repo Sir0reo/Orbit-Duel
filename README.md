@@ -4,9 +4,9 @@ Orbit Duel is a browser arena fighter built with plain HTML, CSS, and JavaScript
 
 ## How To Run
 
-- Open [https://sir0reo.github.io/Orbit-Duel/](https://sir0reo.github.io/Orbit-Duel/) in a browser
-- Or serve the repo locally and open `index.html`
-- `package.json` includes `npm start`, which runs `npx http-server -p 3000`
+- Install dependencies with `npm install`
+- Start the Railway-friendly server with `npm start`
+- Open `http://localhost:3000`
 
 ## Current Flow
 
@@ -60,6 +60,18 @@ In bot mode, only Player 1 is human-controlled.
 
 - Human vs human
 - Both players choose builds manually or with `Random`
+
+### Online
+
+- Click `Online` on the title screen to open the room-code panel
+- Hosting generates a random `6` character room code
+- A second player joins with that code
+- When the room fills, both players are assigned `Player 1` or `Player 2` by a coin flip
+- Both online players use `Player 1` controls: `E` dash, `R` shoot, `F` ability
+- Each player picks only their own build in the menu
+- The host starts the round after both builds are set
+- Input is relayed in real time with Socket.IO
+- If either player disconnects, the room is cleaned up and the remaining player is returned to the title screen
 
 ### Bots
 
@@ -171,6 +183,9 @@ The game currently includes:
 - HTML
 - CSS
 - JavaScript
+- Node.js
+- Express
+- Socket.IO
 
 Main gameplay logic lives in `script.js`.
 

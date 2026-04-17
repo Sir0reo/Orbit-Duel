@@ -71,10 +71,29 @@
                 <div class="title-card">
                     <h1 class="title-logo">Orbit Duel</h1>
 
-                    <div class="title-actions">
+                    <div id="title-actions" class="title-actions">
                         <button id="local-game-btn" class="title-action title-action-primary" type="button">Local Game</button>
-                        <button id="online-game-btn" class="title-action" type="button">Online <span>Coming later</span></button>
+                        <button id="online-game-btn" class="title-action" type="button">Online <span>Room codes</span></button>
                         <button id="bots-game-btn" class="title-action" type="button">Bots <span>Solo duel</span></button>
+                    </div>
+
+                    <div id="online-panel" class="online-panel hidden">
+                        <div class="online-panel-header">
+                            <div class="online-panel-title">Online Duel</div>
+                            <div class="online-panel-subtitle">Host a room to get a 6-character code, or join with a friend’s code.</div>
+                        </div>
+
+                        <div class="online-panel-actions">
+                            <button id="host-room-btn" class="online-panel-btn online-panel-btn-primary" type="button">Host Room</button>
+                            <div id="room-code-display" class="room-code-display">------</div>
+                        </div>
+
+                        <div class="online-panel-actions">
+                            <input id="join-room-code-input" class="room-code-input" type="text" maxlength="6" placeholder="ROOM CODE" autocomplete="off" spellcheck="false">
+                            <button id="join-room-btn" class="online-panel-btn" type="button">Join Room</button>
+                        </div>
+
+                        <div id="online-status" class="online-status">Online matchmaking is ready. Host creates a code, the second player joins, then both players enter the match.</div>
                     </div>
 
                     <div class="title-footer">
@@ -172,6 +191,7 @@
         </div>
     </div>
     
+    <script src="/socket.io/socket.io.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

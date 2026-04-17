@@ -20,9 +20,16 @@ const rematchBtn = document.getElementById('rematch-btn');
 const player1Name = document.getElementById('player1-name');
 const player2Name = document.getElementById('player2-name');
 const titleScreen = document.getElementById('title-screen');
+const titleActions = document.getElementById('title-actions');
 const localGameBtn = document.getElementById('local-game-btn');
 const onlineGameBtn = document.getElementById('online-game-btn');
 const botsGameBtn = document.getElementById('bots-game-btn');
+const onlinePanel = document.getElementById('online-panel');
+const hostRoomBtn = document.getElementById('host-room-btn');
+const joinRoomBtn = document.getElementById('join-room-btn');
+const joinRoomCodeInput = document.getElementById('join-room-code-input');
+const roomCodeDisplay = document.getElementById('room-code-display');
+const onlineStatus = document.getElementById('online-status');
 const menuScreen = document.getElementById('menu-screen');
 const menuSubtitle = document.getElementById('menu-subtitle');
 const botSettings = document.getElementById('bot-settings');
@@ -35,10 +42,13 @@ const buildHoverName = document.getElementById('build-hover-name');
 const buildHoverDesc = document.getElementById('build-hover-desc');
 const buildHoverStats = document.getElementById('build-hover-stats');
 
-// Constants (will be updated by resizeCanvas)
-let ARENA_RADIUS = 388; // slightly larger than the original arena while keeping the border visible
-let CENTER_X = canvas.width / 2;
-let CENTER_Y = canvas.height / 2;
+const BASE_CANVAS_SIZE = 800;
+const BASE_ARENA_RADIUS = 388; // slightly larger than the original arena while keeping the border visible
+
+// Constants (the game world stays fixed; resizeCanvas only changes display size)
+let ARENA_RADIUS = BASE_ARENA_RADIUS;
+let CENTER_X = BASE_CANVAS_SIZE / 2;
+let CENTER_Y = BASE_CANVAS_SIZE / 2;
 
 const BALL_RADIUS = 25;
 const BALL_BASE_SPEED = 200; // pixels per second
@@ -75,7 +85,7 @@ const TRAPPER_MINE_RADIUS = 8;
 const TRAPPER_BLAST_RADIUS = 56;
 const TRAPPER_TRIGGER_DELAY = 0.75;
 const GAMBLER_CARD_MIN_DAMAGE = 50;
-const GAMBLER_CARD_MAX_DAMAGE = 150;
+const GAMBLER_CARD_MAX_DAMAGE = 125;
 const TRAPPER_LINK_DAMAGE = 50;
 const TRAPPER_LINK_DURATION = 5.0;
 const TRAPPER_LINK_SLOW_DURATION = 0;
@@ -314,10 +324,246 @@ let collisionDamageCooldown = 0;
 let roundEndActive = false;
 let koRevealTimeout = null;
 let rematchRevealTimeout = null;
+let socket = null;
+let roomCode = '';
+let onlineLocalPlayerId = 1;
+let onlineIsHost = false;
+let suppressOnlineBuildBroadcast = false;
+let lastOnlineInputSignature = '';
+let lastOnlineStateSentAt = 0;
+const onlineInputState = {
+    1: { dashDown: false, shootDown: false, specialDown: false },
+    2: { dashDown: false, shootDown: false, specialDown: false },
+};
+const ONLINE_STATE_INTERVAL_MS = 1000 / 30;
 const secretCheatState = {
     '.': [],
     ',': [],
 };
+
+function isOnlineMode() {
+    return currentGameMode === 'online';
+}
+
+function resetOnlineInputs() {
+    onlineInputState[1] = { dashDown: false, shootDown: false, specialDown: false };
+    onlineInputState[2] = { dashDown: false, shootDown: false, specialDown: false };
+    lastOnlineInputSignature = '';
+}
+
+function getOnlineLocalInputSnapshot() {
+    return {
+        dashDown: !!keys.e,
+        shootDown: !!keys.r,
+        specialDown: !!keys.f,
+    };
+}
+
+function updateOnlineStatus(message) {
+    if (onlineStatus) onlineStatus.textContent = message;
+}
+
+function setRoomCodeDisplay(code = '------') {
+    if (roomCodeDisplay) roomCodeDisplay.textContent = code;
+}
+
+function setOnlineControlsDisabled(disabled) {
+    if (hostRoomBtn) hostRoomBtn.disabled = disabled;
+    if (joinRoomBtn) joinRoomBtn.disabled = disabled;
+    if (joinRoomCodeInput) joinRoomCodeInput.disabled = disabled;
+}
+
+function showOnlinePanel() {
+    if (!onlinePanel) return;
+    onlinePanel.classList.remove('hidden');
+    updateOnlineStatus('Host a room to generate a 6-character code, or join with a friend\'s code.');
+}
+
+function hideOnlinePanel() {
+    if (!onlinePanel) return;
+    onlinePanel.classList.add('hidden');
+}
+
+function updateOnlineMenuState() {
+    if (!isOnlineMode()) return;
+    const localLabel = onlineLocalPlayerId === 1 ? 'YOU' : 'OPPONENT';
+    const remoteLabel = onlineLocalPlayerId === 2 ? 'YOU' : 'OPPONENT';
+    menuSubtitle.textContent = onlineIsHost
+        ? `Room ${roomCode} is full. Pick builds, then start the round.`
+        : `Connected to room ${roomCode}. Pick your build and wait for the host to start.`;
+    menuPlayer1Title.textContent = `PLAYER 1 ${localLabel}`;
+    menuPlayer2Title.textContent = `PLAYER 2 ${remoteLabel}`;
+    player1Name.textContent = onlineLocalPlayerId === 1 ? 'YOU' : 'OPPONENT';
+    player2Name.textContent = onlineLocalPlayerId === 2 ? 'YOU' : 'OPPONENT';
+    startRoundBtn.textContent = onlineIsHost ? 'START ONLINE ROUND' : 'WAITING FOR HOST';
+    startRoundBtn.disabled = !onlineIsHost;
+    menuHint.innerHTML = `Both online players use <span class="key">E</span> dash <span class="key">R</span> shoot <span class="key">F</span> ability. Room code: <span class="key">${roomCode || '------'}</span>`;
+
+    document.querySelectorAll('.menu-options').forEach(group => {
+        const playerId = Number(group.getAttribute('data-player'));
+        const isOwned = playerId === onlineLocalPlayerId;
+        group.querySelectorAll('.menu-option').forEach(btn => {
+            btn.disabled = !isOwned;
+        });
+    });
+
+    document.querySelectorAll('.menu-random-btn').forEach(btn => {
+        const playerId = Number(btn.getAttribute('data-random-player'));
+        btn.disabled = playerId !== onlineLocalPlayerId;
+    });
+}
+
+function initializeSocketConnection() {
+    if (socket || typeof io === 'undefined') return socket;
+    socket = io("https://orbit-server-production-4511.up.railway.app");
+
+    socket.on('connect_error', () => {
+        updateOnlineStatus('Unable to reach the online server right now.');
+        setOnlineControlsDisabled(false);
+    });
+
+    socket.on('room-hosted', ({ code }) => {
+        roomCode = code;
+        onlineIsHost = true;
+        setRoomCodeDisplay(code);
+        updateOnlineStatus(`Room ${code} created. Share the code and wait for a second player.`);
+        setOnlineControlsDisabled(false);
+    });
+
+    socket.on('room-joined', ({ code }) => {
+        roomCode = code;
+        onlineIsHost = false;
+        setRoomCodeDisplay(code);
+        updateOnlineStatus(`Joined room ${code}. Waiting for the host to finish setup.`);
+        setOnlineControlsDisabled(false);
+    });
+
+    socket.on('game-start', ({ code, playerId, isHost, selectedBuilds: incomingBuilds }) => {
+        roomCode = code;
+        onlineLocalPlayerId = playerId;
+        onlineIsHost = isHost;
+        selectedBuilds = { ...selectedBuilds, ...incomingBuilds };
+        resetOnlineInputs();
+        setRoomCodeDisplay(code);
+        configureMenuForMode('online');
+        updateOnlineMenuState();
+        showBuildMenu('online');
+        updateOnlineStatus(`Room ${code} is ready. ${isHost ? 'Start the round when both builds are set.' : 'Set your build and wait for the host.'}`);
+    });
+
+    socket.on('online-build-select', ({ playerId, build }) => {
+        suppressOnlineBuildBroadcast = true;
+        selectBuildForPlayer(playerId, build, { revealHover: false });
+        suppressOnlineBuildBroadcast = false;
+        if (isOnlineMode()) updateOnlineMenuState();
+    });
+
+    socket.on('online-round-start', ({ selectedBuilds: incomingBuilds }) => {
+        selectedBuilds = { ...selectedBuilds, ...incomingBuilds };
+        startRoundFromMenu();
+    });
+
+    socket.on('online-return-menu', () => {
+        showBuildMenu('online');
+    });
+
+    socket.on('online-input', ({ playerId, inputs }) => {
+        onlineInputState[playerId] = { ...onlineInputState[playerId], ...inputs };
+    });
+
+    socket.on('online-state', ({ state }) => {
+        if (!isOnlineMode() || onlineIsHost) return;
+        applyOnlineState(state);
+    });
+
+    socket.on('room-ended', ({ message }) => {
+        roomCode = '';
+        onlineIsHost = false;
+        resetOnlineInputs();
+        setRoomCodeDisplay();
+        setOnlineControlsDisabled(false);
+        updateOnlineStatus(message || 'The online room was closed.');
+        showTitleScreen();
+        showOnlinePanel();
+    });
+
+    socket.on('online-error', ({ message }) => {
+        updateOnlineStatus(message || 'Online action failed.');
+        setOnlineControlsDisabled(false);
+    });
+
+    socket.on('online-game-over', ({ winnerId }) => {
+        if (!isOnlineMode() || onlineIsHost) return;
+        endGame(winnerId);
+    });
+
+    return socket;
+}
+
+function sendOnlineInputs(force = false) {
+    if (!isOnlineMode() || !socket || !socket.connected || !roomCode || inMenu) return;
+    const snapshot = getOnlineLocalInputSnapshot();
+    onlineInputState[onlineLocalPlayerId] = snapshot;
+    const signature = JSON.stringify(snapshot);
+    if (!force && signature === lastOnlineInputSignature) return;
+    lastOnlineInputSignature = signature;
+    socket.emit('online-input', { roomCode, playerId: onlineLocalPlayerId, inputs: snapshot });
+}
+
+function cloneNetworkObject(value) {
+    return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function serializeOnlineState() {
+    return {
+        p1: cloneNetworkObject(p1),
+        p2: cloneNetworkObject(p2),
+        bullets: cloneNetworkObject(bullets),
+        summons: cloneNetworkObject(summons),
+        pickups: cloneNetworkObject(pickups),
+    };
+}
+
+function revivePlayer(snapshot) {
+    if (!snapshot) return null;
+    const player = Object.assign(Object.create(Player.prototype), snapshot);
+    player.buildCfg = BUILDS[player.build] ?? BUILDS.gunner;
+    return player;
+}
+
+function reviveBullet(snapshot) {
+    return Object.assign(Object.create(Bullet.prototype), snapshot);
+}
+
+function reviveSummon(snapshot) {
+    if (!snapshot) return snapshot;
+    const proto = snapshot.type === 'trapmine'
+        ? TrapMine.prototype
+        : (snapshot.type === 'traplink' ? TrapLink.prototype : Clone.prototype);
+    return Object.assign(Object.create(proto), snapshot);
+}
+
+function revivePickup(snapshot) {
+    return Object.assign(Object.create(Pickup.prototype), snapshot);
+}
+
+function applyOnlineState(state) {
+    if (!state) return;
+    p1 = revivePlayer(state.p1);
+    p2 = revivePlayer(state.p2);
+    bullets = (state.bullets ?? []).map(reviveBullet);
+    summons = (state.summons ?? []).map(reviveSummon);
+    pickups = (state.pickups ?? []).map(revivePickup);
+    p1?.updateUI();
+    p2?.updateUI();
+}
+
+function sendAuthoritativeOnlineState(timestamp) {
+    if (!isOnlineMode() || !onlineIsHost || !socket || !socket.connected || !roomCode) return;
+    if (timestamp - lastOnlineStateSentAt < ONLINE_STATE_INTERVAL_MS) return;
+    lastOnlineStateSentAt = timestamp;
+    socket.emit('online-state', { roomCode, state: serializeOnlineState() });
+}
 
 const BOT_DIFFICULTY_CONFIG = {
     easy: {
@@ -426,7 +672,7 @@ const BUILD_MENU_INFO = {
         statValues: { hp: 1000, damage: 20, primaryCd: 0.0, abilityCd: 30.0 }
     },
     necromancer: {
-        build: 'Orb caster that pressures with roaming clones and repeated homing pressure.',
+        build: 'his racist uncle is called negromancer',
         primary: 'Fires a slow orb in the aimed direction that curves weakly toward enemy targets.',
         ability: 'Summons two fragile clones that move around the arena and keep firing orbs until they die.',
         statValues: { hp: 1000, damage: 80, primaryCd: 3.0, abilityCd: 35.0 }
@@ -438,13 +684,13 @@ const BUILD_MENU_INFO = {
         statValues: { hp: 1500, damage: 50, primaryCd: 4.0, abilityCd: 25.0 }
     },
     trapper: {
-        build: 'prediction merchant',
+        build: 'vietnam war veteran',
         primary: 'Drops a proximity mine at the current position. Up to 3 mines can exist at once, and placing a fourth removes the oldest.',
         ability: 'Detonates all active mines at once and leaves electric links between their positions for 5 seconds.',
         statValues: { hp: 1000, damage: 150, primaryCd: 1.5, abilityCd: 30.0 }
     },
     gambler: {
-        build: 'rng goblin',
+        build: 'gold gold gold',
         primary: 'Throws a spinning poker card that bounces off the arena border twice. Every card rolls random damage.',
         ability: 'Triggers one of five random outcomes: heal, enemy slow, self damage, big card, or triple shot.',
         statValues: { hp: 1000, damage: 150, primaryCd: 2.0, abilityCd: 25.0 }
@@ -472,10 +718,12 @@ window.addEventListener('keydown', (e) => {
     if (!e.repeat) {
         trackSecretCheat(e.key);
     }
+    sendOnlineInputs();
 });
 
 window.addEventListener('keyup', (e) => {
     keys[e.key.toLowerCase()] = false;
+    sendOnlineInputs();
 });
 
 // Touch controls for mobile
@@ -615,6 +863,9 @@ function initTouchControls() {
 initTouchControls();
 
 rematchBtn.addEventListener('click', () => {
+    if (isOnlineMode() && socket && roomCode) {
+        socket.emit('online-return-menu', { roomCode });
+    }
     showBuildMenu(currentGameMode);
 });
 
@@ -623,7 +874,8 @@ localGameBtn.addEventListener('click', () => {
 });
 
 onlineGameBtn.addEventListener('click', () => {
-    // Placeholder for future online flow.
+    initializeSocketConnection();
+    showOnlinePanel();
 });
 
 botsGameBtn.addEventListener('click', () => {
@@ -631,7 +883,50 @@ botsGameBtn.addEventListener('click', () => {
 });
 
 startRoundBtn.addEventListener('click', () => {
+    if (isOnlineMode()) {
+        if (!onlineIsHost || !socket || !roomCode) return;
+        socket.emit('online-start-round', { roomCode, selectedBuilds });
+        return;
+    }
     startRoundFromMenu();
+});
+
+hostRoomBtn?.addEventListener('click', () => {
+    initializeSocketConnection();
+    if (!socket) {
+        updateOnlineStatus('Socket.IO is unavailable. Start the app through the Node server.');
+        return;
+    }
+    setOnlineControlsDisabled(true);
+    updateOnlineStatus('Creating room...');
+    socket.emit('host-room');
+});
+
+joinRoomBtn?.addEventListener('click', () => {
+    initializeSocketConnection();
+    if (!socket) {
+        updateOnlineStatus('Socket.IO is unavailable. Start the app through the Node server.');
+        return;
+    }
+    const code = joinRoomCodeInput.value.trim().toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(code)) {
+        updateOnlineStatus('Enter a valid 6-character room code.');
+        return;
+    }
+    setOnlineControlsDisabled(true);
+    updateOnlineStatus(`Joining room ${code}...`);
+    socket.emit('join-room', { code });
+});
+
+joinRoomCodeInput?.addEventListener('input', () => {
+    joinRoomCodeInput.value = joinRoomCodeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+});
+
+joinRoomCodeInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        joinRoomBtn?.click();
+    }
 });
 
 function showBuildHover(build) {
@@ -683,6 +978,7 @@ function hideBuildHover() {
 
 function selectBuildForPlayer(playerId, build, { revealHover = false } = {}) {
     if (!BUILDS[build]) return;
+    if (isOnlineMode() && playerId !== onlineLocalPlayerId && !suppressOnlineBuildBroadcast) return;
     selectedBuilds[playerId] = build;
     const group = document.querySelector(`.menu-options[data-player="${playerId}"]`);
     if (!group) return;
@@ -690,6 +986,9 @@ function selectBuildForPlayer(playerId, build, { revealHover = false } = {}) {
         btn.classList.toggle('selected', btn.getAttribute('data-build') === build);
     });
     if (revealHover) showBuildHover(build);
+    if (isOnlineMode() && !suppressOnlineBuildBroadcast && socket && roomCode) {
+        socket.emit('online-build-select', { roomCode, playerId, build });
+    }
 }
 
 document.querySelectorAll('.menu-options').forEach(group => {
@@ -697,6 +996,7 @@ document.querySelectorAll('.menu-options').forEach(group => {
         const btn = e.target.closest('.menu-option');
         if (!btn) return;
         const playerId = Number(group.getAttribute('data-player'));
+        if (isOnlineMode() && playerId !== onlineLocalPlayerId) return;
         const build = btn.getAttribute('data-build');
         selectBuildForPlayer(playerId, build, { revealHover: true });
     });
@@ -723,6 +1023,7 @@ document.querySelectorAll('.menu-options').forEach(group => {
 document.querySelectorAll('.menu-random-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         const playerId = Number(btn.getAttribute('data-random-player'));
+        if (isOnlineMode() && playerId !== onlineLocalPlayerId) return;
         const builds = Object.keys(BUILDS);
         const randomBuild = builds[Math.floor(Math.random() * builds.length)];
         selectBuildForPlayer(playerId, randomBuild, { revealHover: true });
@@ -834,6 +1135,12 @@ function getNecroOrbTarget(ownerId, x, y) {
 }
 
 function getHumanInputs(player) {
+    if (isOnlineMode()) {
+        if (player.id === onlineLocalPlayerId) {
+            return getOnlineLocalInputSnapshot();
+        }
+        return onlineInputState[player.id] ?? { dashDown: false, shootDown: false, specialDown: false };
+    }
     const dashKey = player.id === 1 ? 'e' : 'o';
     const shootKey = player.id === 1 ? 'r' : 'p';
     const specialKey = player.id === 1 ? 'f' : 'l';
@@ -1939,8 +2246,25 @@ class Player {
         const points = mines.map(m => ({ x: m.x, y: m.y }));
         mines.forEach(mine => mine.remoteDetonate());
         if (points.length >= 2) {
+            let longestPairKey = null;
+            if (points.length === 3) {
+                let longestDistanceSq = -1;
+                for (let i = 0; i < points.length; i++) {
+                    for (let j = i + 1; j < points.length; j++) {
+                        const dx = points[i].x - points[j].x;
+                        const dy = points[i].y - points[j].y;
+                        const distanceSq = dx * dx + dy * dy;
+                        if (distanceSq > longestDistanceSq) {
+                            longestDistanceSq = distanceSq;
+                            longestPairKey = `${i}-${j}`;
+                        }
+                    }
+                }
+            }
+
             for (let i = 0; i < points.length; i++) {
                 for (let j = i + 1; j < points.length; j++) {
+                    if (longestPairKey === `${i}-${j}`) continue;
                     summons.push(new TrapLink(this.id, points[i].x, points[i].y, points[j].x, points[j].y, this.color));
                 }
             }
@@ -4003,19 +4327,27 @@ function updateBotDifficultyButtons() {
 function configureMenuForMode(mode) {
     currentGameMode = mode;
     const isBotsMode = mode === 'bots';
+    const isOnline = mode === 'online';
     botSettings.classList.toggle('hidden', !isBotsMode);
     menuSubtitle.textContent = isBotsMode
         ? 'Pick your build, set the bot build, then choose a difficulty.'
-        : 'Pick a build for each player, then start the round.';
+        : (isOnline ? 'Pick your build for the online duel.' : 'Pick a build for each player, then start the round.');
     menuPlayer1Title.textContent = 'PLAYER 1';
     menuPlayer2Title.textContent = isBotsMode ? 'BOT' : 'PLAYER 2';
     player1Name.textContent = 'PLAYER 1';
     player2Name.textContent = isBotsMode ? `BOT ${botDifficulty.toUpperCase()}` : 'PLAYER 2';
-    startRoundBtn.textContent = isBotsMode ? 'START BOT MATCH' : 'START ROUND';
+    startRoundBtn.textContent = isBotsMode ? 'START BOT MATCH' : (isOnline ? 'START ONLINE ROUND' : 'START ROUND');
+    startRoundBtn.disabled = false;
     menuHint.innerHTML = isBotsMode
         ? 'P1: Dash <span class="key">E</span> Shoot <span class="key">R</span> Ability <span class="key">F</span><br>The bot controls itself based on the selected difficulty.'
-        : 'P1: Dash <span class="key">E</span> | Shoot <span class="key">R</span> | Ability <span class="key">F</span><br>P2: Dash <span class="key">O</span> | Shoot <span class="key">P</span> | Ability <span class="key">L</span>';
+        : (isOnline
+            ? 'Online controls use <span class="key">E</span> dash <span class="key">R</span> shoot <span class="key">F</span> ability for both players.'
+            : 'P1: Dash <span class="key">E</span> | Shoot <span class="key">R</span> | Ability <span class="key">F</span><br>P2: Dash <span class="key">O</span> | Shoot <span class="key">P</span> | Ability <span class="key">L</span>');
     updateBotDifficultyButtons();
+    document.querySelectorAll('.menu-options .menu-option, .menu-random-btn').forEach(el => {
+        el.disabled = false;
+    });
+    if (isOnline) updateOnlineMenuState();
 }
 
 function initGame() {
@@ -4057,6 +4389,7 @@ function initGame() {
     
     // Reset key states on restart otherwise they might stay stuck if held
     for (let key in keys) keys[key] = false;
+    resetOnlineInputs();
     
     p1.updateUI();
     p2.updateUI();
@@ -4065,6 +4398,8 @@ function initGame() {
     pickupSpawnTimer = randBetween(PICKUP_SPAWN_MIN, PICKUP_SPAWN_MAX);
     
     lastTime = performance.now();
+    lastOnlineStateSentAt = 0;
+    sendOnlineInputs(true);
     requestAnimationFrame(gameLoop);
 }
 
@@ -4085,6 +4420,10 @@ function showTitleScreen() {
     rematchBtn.classList.add('hidden');
     menuScreen.classList.add('hidden');
     titleScreen.classList.remove('hidden');
+    if (titleActions) titleActions.classList.remove('hidden');
+    hideOnlinePanel();
+    startRoundBtn.disabled = false;
+    setOnlineControlsDisabled(false);
 }
 
 function showBuildMenu(mode = currentGameMode) {
@@ -4106,6 +4445,8 @@ function showBuildMenu(mode = currentGameMode) {
     rematchBtn.classList.add('hidden');
     titleScreen.classList.add('hidden');
     menuScreen.classList.remove('hidden');
+    hideOnlinePanel();
+    if (mode === 'online') updateOnlineMenuState();
 }
 
 function startRoundFromMenu() {
@@ -4114,6 +4455,9 @@ function startRoundFromMenu() {
 }
 
 function endGame(winnerId) {
+    if (isOnlineMode() && onlineIsHost && socket && roomCode) {
+        socket.emit('online-game-over', { roomCode, winnerId });
+    }
     gameOver = true;
     roundEndActive = false;
     if (koRevealTimeout) {
@@ -4230,50 +4574,55 @@ function gameLoop(timestamp) {
     drawArena();
 
     if (!gameOver && !inMenu) {
-        p1.update(dt);
-        p2.update(dt);
-        resolvePlayerCollision(p1, p2);
-        
-        // Update bullets and remove inactive ones
-        bullets.forEach(b => b.update(dt));
-        bullets = bullets.filter(b => b.active);
+        if (!isOnlineMode() || onlineIsHost) {
+            p1.update(dt);
+            p2.update(dt);
+            resolvePlayerCollision(p1, p2);
+            
+            // Update bullets and remove inactive ones
+            bullets.forEach(b => b.update(dt));
+            bullets = bullets.filter(b => b.active);
 
-        // Update particles
-        particles.forEach(p => p.update(dt));
-        particles = particles.filter(p => p.active);
+            // Update particles
+            particles.forEach(p => p.update(dt));
+            particles = particles.filter(p => p.active);
 
-        summons.forEach(s => s.update(dt));
-        summons = summons.filter(s => s.active);
-        summons.forEach(s => {
-            resolveJuggernautCloneCollision(p1, s);
-            resolveJuggernautCloneCollision(p2, s);
-        });
+            summons.forEach(s => s.update(dt));
+            summons = summons.filter(s => s.active);
+            summons.forEach(s => {
+                resolveJuggernautCloneCollision(p1, s);
+                resolveJuggernautCloneCollision(p2, s);
+            });
 
-        // Spawn pickups (medkit/syringe)
-        pickupSpawnTimer -= dt;
-        if (pickupSpawnTimer <= 0) {
-            spawnPickup();
-            pickupSpawnTimer = randBetween(PICKUP_SPAWN_MIN, PICKUP_SPAWN_MAX);
+            // Spawn pickups (medkit/syringe)
+            pickupSpawnTimer -= dt;
+            if (pickupSpawnTimer <= 0) {
+                spawnPickup();
+                pickupSpawnTimer = randBetween(PICKUP_SPAWN_MIN, PICKUP_SPAWN_MAX);
+            }
+
+            // Handle pickup collisions (first touch wins)
+            pickups.forEach(pk => {
+                if (!pk.active) return;
+                const dist1 = Math.hypot(pk.x - p1.x, pk.y - p1.y);
+                if (dist1 <= BALL_RADIUS + PICKUP_RADIUS) {
+                    if (pk.type === 'medkit') p1.heal(MEDKIT_HEAL);
+                    else if (pk.type === 'syringe') p1.nextAttackDamageMult = SYRINGE_MULT;
+                    pk.active = false;
+                    return;
+                }
+                const dist2 = Math.hypot(pk.x - p2.x, pk.y - p2.y);
+                if (dist2 <= BALL_RADIUS + PICKUP_RADIUS) {
+                    if (pk.type === 'medkit') p2.heal(MEDKIT_HEAL);
+                    else if (pk.type === 'syringe') p2.nextAttackDamageMult = SYRINGE_MULT;
+                    pk.active = false;
+                }
+            });
+            pickups = pickups.filter(pk => pk.active);
+            sendAuthoritativeOnlineState(timestamp);
+        } else {
+            sendOnlineInputs();
         }
-
-        // Handle pickup collisions (first touch wins)
-        pickups.forEach(pk => {
-            if (!pk.active) return;
-            const dist1 = Math.hypot(pk.x - p1.x, pk.y - p1.y);
-            if (dist1 <= BALL_RADIUS + PICKUP_RADIUS) {
-                if (pk.type === 'medkit') p1.heal(MEDKIT_HEAL);
-                else if (pk.type === 'syringe') p1.nextAttackDamageMult = SYRINGE_MULT;
-                pk.active = false;
-                return;
-            }
-            const dist2 = Math.hypot(pk.x - p2.x, pk.y - p2.y);
-            if (dist2 <= BALL_RADIUS + PICKUP_RADIUS) {
-                if (pk.type === 'medkit') p2.heal(MEDKIT_HEAL);
-                else if (pk.type === 'syringe') p2.nextAttackDamageMult = SYRINGE_MULT;
-                pk.active = false;
-            }
-        });
-        pickups = pickups.filter(pk => pk.active);
     } else if (roundEndActive && !inMenu) {
         particles.forEach(p => p.update(dt));
         particles = particles.filter(p => p.active);
@@ -4295,45 +4644,35 @@ function gameLoop(timestamp) {
 }
 
 function resizeCanvas() {
-    // Calculate canvas size based on viewport to maintain proper scaling
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    
-    // Keep the frame closer to the arena border
-    let canvasSize = Math.min(viewportWidth * 0.88, viewportHeight * 0.88);
-    
-    // Ensure minimum size for gameplay
-    canvasSize = Math.max(canvasSize, 440);
-    
-    // For mobile, allow it to be larger if in landscape
+    const shortestSide = Math.min(viewportWidth, viewportHeight);
+
+    // Keep one shared gameplay coordinate system and only scale the rendered canvas.
+    let displayScale = 0.9;
+
+    if (shortestSide <= 1400) displayScale = 0.86;
+    if (shortestSide <= 1200) displayScale = 0.82;
+    if (shortestSide <= 1000) displayScale = 0.78;
+    if (shortestSide <= 850) displayScale = 0.74;
+    if (shortestSide <= 700) displayScale = 0.7;
+    if (shortestSide <= 560) displayScale = 0.66;
+    if (shortestSide <= 430) displayScale = 0.62;
+
+    let displaySize = Math.min(viewportWidth * displayScale, viewportHeight * displayScale);
+
     if (viewportWidth > viewportHeight && viewportWidth <= 768) {
-        canvasSize = Math.min(viewportWidth * 0.94, viewportHeight * 0.94);
+        displaySize = Math.min(viewportWidth * Math.min(displayScale + 0.04, 0.76), viewportHeight * Math.min(displayScale + 0.04, 0.76));
     }
-    
-    canvas.width = canvasSize;
-    canvas.height = canvasSize;
-    
-    // Update constants based on new canvas size
-    // Baseline: canvas 800x800, arena radius 388
-    const scale = canvasSize / 800;
-    ARENA_RADIUS = 388 * scale;
-    CENTER_X = canvas.width / 2;
-    CENTER_Y = canvas.height / 2;
-    
-    // If game is running, reposition players if they're outside bounds
-    if (p1 && p2 && !gameOver && !inMenu) {
-        // Keep players within arena bounds
-        const repositionPlayer = (player) => {
-            const distFromCenter = Math.sqrt((player.x - CENTER_X) ** 2 + (player.y - CENTER_Y) ** 2);
-            if (distFromCenter > ARENA_RADIUS - BALL_RADIUS) {
-                const angle = Math.atan2(player.y - CENTER_Y, player.x - CENTER_X);
-                player.x = CENTER_X + Math.cos(angle) * (ARENA_RADIUS - BALL_RADIUS - 10);
-                player.y = CENTER_Y + Math.sin(angle) * (ARENA_RADIUS - BALL_RADIUS - 10);
-            }
-        };
-        repositionPlayer(p1);
-        repositionPlayer(p2);
-    }
+
+    canvas.width = BASE_CANVAS_SIZE;
+    canvas.height = BASE_CANVAS_SIZE;
+    canvas.style.width = `${displaySize}px`;
+    canvas.style.height = `${displaySize}px`;
+
+    ARENA_RADIUS = BASE_ARENA_RADIUS;
+    CENTER_X = BASE_CANVAS_SIZE / 2;
+    CENTER_Y = BASE_CANVAS_SIZE / 2;
 }
 
 // Handle window resize
