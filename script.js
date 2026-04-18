@@ -334,12 +334,31 @@ let suppressOnlineBuildBroadcast = false;
 let lastOnlineInputSignature = '';
 let lastOnlineStateSentAt = 0;
 let lastOnlineStateSignature = '';
+let onlineStateSequence = 0;
+let lastReceivedOnlineStateSequence = -1;
 const onlineInputState = {
     1: { dashDown: false, shootDown: false, specialDown: false },
     2: { dashDown: false, shootDown: false, specialDown: false },
 };
-const ONLINE_STATE_INTERVAL_MS = 1000 / 12;
+const ONLINE_STATE_INTERVAL_MS = 1000 / 30;
 const ONLINE_SERVER_URL_STORAGE_KEY = 'orbit-duel-server-url';
+const ONLINE_PLAYER_SYNC_FIELDS = [
+    'x', 'y', 'hp', 'dirX', 'dirY', 'spinAngle', 'dashTimer', 'dashCooldown', 'isDashing',
+    'shootCooldown', 'isHoldingShoot', 'shootHoldTime', '_shootWasDown',
+    'specialCooldown', 'isSpecialFiring', 'specialFireTime', 'specialBulletsFired',
+    'beamTimer', 'beamDamage', 'beamStartX', 'beamStartY', 'beamEndX', 'beamEndY', 'beamHasHit', 'boundaryZapTime',
+    'swordAttackTime', 'swordAbilityTime', 'swordHitLock', 'swordDamageOverride', 'swordAbilityDamageOverride',
+    'archerChargeTime', 'archerStage', 'archerNextBuff', '_specialWasDown',
+    'nextAttackDamageMult', 'hasSyringeBuff',
+    'ninjaSlashTime', 'ninjaSlashHitDealt', 'ninjaSlashBaseAngle', 'ninjaStrikeFxTime', 'ninjaStrikeFxX', 'ninjaStrikeFxY', 'ninjaStrikeFxAngle',
+    'reaperAbilityTime', 'reaperDebuffTime', 'reaperDebuffDamageMult', 'reaperDebuffSpeedMult', 'reaperDebuffShootMult', 'scytheHeld', 'hasScythe',
+    'statusSlowTime', 'statusSlowMult', 'burnTime', 'burnDamagePerSec', 'pullTowardTime', 'pullTowardStrength', 'pullTargetId',
+    'hookVisualTime',
+    'pyroAmmo', 'pyroFiring', 'pyroTargetInsideCone', 'pyroTickTimer', 'pyroIgniteTimer', 'pyroWaveTime', 'pyroWaveRadius', 'pyroWaveHit',
+    'gamblerBigCardReady', 'gamblerTripleShotReady', 'gamblerHealTime', 'gamblerHealRate', 'gamblerShockTime',
+    'juggernautPullTime', 'juggernautInvulnTime',
+    'isEliminated'
+];
 const secretCheatState = {
     '.': [],
     ',': [],
@@ -355,6 +374,8 @@ function resetOnlineInputs() {
     lastOnlineInputSignature = '';
     lastOnlineStateSentAt = 0;
     lastOnlineStateSignature = '';
+    onlineStateSequence = 0;
+    lastReceivedOnlineStateSequence = -1;
 }
 
 function getOnlineLocalInputSnapshot() {
@@ -518,8 +539,10 @@ function initializeSocketConnection() {
         onlineInputState[playerId] = { ...onlineInputState[playerId], ...inputs };
     });
 
-    socket.on('online-state', ({ state }) => {
+    socket.on('online-state', ({ state, sequence = 0 }) => {
         if (!isOnlineMode() || onlineIsHost || !state) return;
+        if (sequence <= lastReceivedOnlineStateSequence) return;
+        lastReceivedOnlineStateSequence = sequence;
         applyOnlineState(state);
     });
 
@@ -558,46 +581,104 @@ function roundNet(value, precision = 10) {
 
 function summarizePlayerState(player) {
     if (!player) return null;
-    return {
-        x: roundNet(player.x),
-        y: roundNet(player.y),
-        hp: Math.round(player.hp),
-        dirX: roundNet(player.dirX, 100),
-        dirY: roundNet(player.dirY, 100),
-        spinAngle: roundNet(player.spinAngle, 100),
-        dashCooldown: roundNet(player.dashCooldown, 100),
-        shootCooldown: roundNet(player.shootCooldown, 100),
-        specialCooldown: roundNet(player.specialCooldown, 100),
-        isDashing: !!player.isDashing,
-        isHoldingShoot: !!player.isHoldingShoot,
+    const snapshot = {
         build: player.build,
-        isEliminated: !!player.isEliminated,
+        maxHp: Math.round(player.maxHp),
     };
+    ONLINE_PLAYER_SYNC_FIELDS.forEach((field) => {
+        const value = player[field];
+        if (typeof value === 'number') {
+            snapshot[field] = roundNet(value, 100);
+        } else if (typeof value === 'boolean' || typeof value === 'string' || value === null) {
+            snapshot[field] = value;
+        }
+    });
+    return snapshot;
 }
 
 function summarizeBulletState(bullet) {
     return {
         type: bullet.type,
         ownerId: bullet.ownerId,
+        color: bullet.color,
         x: roundNet(bullet.x),
         y: roundNet(bullet.y),
         dirX: roundNet(bullet.dirX, 100),
         dirY: roundNet(bullet.dirY, 100),
+        speed: roundNet(bullet.speed, 100),
         radius: roundNet(bullet.radius, 100),
         damage: Math.round(bullet.damage),
+        maxBounces: bullet.maxBounces ?? 0,
+        bounces: bullet.bounces ?? 0,
+        scale: roundNet(bullet.scale ?? 1, 100),
+        isNinjaStar: !!bullet.isNinjaStar,
+        isScythe: !!bullet.isScythe,
+        returning: !!bullet.returning,
+        ninjaStarRotation: roundNet(bullet.ninjaStarRotation ?? 0, 100),
+        rotation: roundNet(bullet.rotation ?? 0, 100),
+        cardRotation: roundNet(bullet.cardRotation ?? 0, 100),
+        lifetime: roundNet(bullet.lifetime ?? 0, 100),
+        maxDistance: bullet.maxDistance == null ? null : roundNet(bullet.maxDistance, 100),
+        distanceTraveled: roundNet(bullet.distanceTraveled ?? 0, 100),
+        minDamageMult: roundNet(bullet.minDamageMult ?? 1, 100),
+        trackTargetId: bullet.trackTargetId ?? null,
+        turnRate: roundNet(bullet.turnRate ?? 0, 1000),
+        fromClone: !!bullet.fromClone,
+        waveBurnDuration: roundNet(bullet.waveBurnDuration ?? 0, 100),
+        pullStrength: roundNet(bullet.pullStrength ?? 0, 100),
+        returnSpeed: roundNet(bullet.returnSpeed ?? bullet.speed ?? 0, 100),
+        hookedTargetId: bullet.hookedTargetId ?? null,
+        hookHasDamaged: !!bullet.hookHasDamaged,
+        lastHitTimes: bullet.lastHitTimes ? { ...bullet.lastHitTimes } : { 1: 0, 2: 0 },
+        createdTime: roundNet(bullet.createdTime ?? 0, 100),
         active: !!bullet.active,
     };
 }
 
 function summarizeSummonState(summon) {
-    return {
+    const base = {
         type: summon.type ?? 'clone',
         ownerId: summon.ownerId,
         x: roundNet(summon.x),
         y: roundNet(summon.y),
         radius: roundNet(summon.radius, 100),
+        color: summon.color ?? '#ffffff',
         active: !!summon.active,
     };
+    if ((summon.type ?? 'clone') === 'clone') {
+        return {
+            ...base,
+            hp: Math.round(summon.hp ?? 1),
+            fireTimer: roundNet(summon.fireTimer ?? 0, 100),
+            lifeTime: roundNet(summon.lifeTime ?? 0, 100),
+            dirX: roundNet(summon.dirX ?? 0, 100),
+            dirY: roundNet(summon.dirY ?? 0, 100),
+            speed: roundNet(summon.speed ?? 0, 100),
+        };
+    }
+    if (summon.type === 'trapmine') {
+        return {
+            ...base,
+            blastRadius: roundNet(summon.blastRadius ?? 0, 100),
+            damage: Math.round(summon.damage ?? 0),
+            triggerDelay: roundNet(summon.triggerDelay ?? 0, 100),
+            flashTimer: roundNet(summon.flashTimer ?? 0, 100),
+            triggered: !!summon.triggered,
+            createdAt: roundNet(summon.createdAt ?? 0, 100),
+        };
+    }
+    if (summon.type === 'traplink') {
+        return {
+            ...base,
+            x1: roundNet(summon.x1 ?? summon.x, 100),
+            y1: roundNet(summon.y1 ?? summon.y, 100),
+            x2: roundNet(summon.x2 ?? summon.x, 100),
+            y2: roundNet(summon.y2 ?? summon.y, 100),
+            lifeTime: roundNet(summon.lifeTime ?? 0, 100),
+            hitCooldown: roundNet(summon.hitCooldown ?? 0, 100),
+        };
+    }
+    return base;
 }
 
 function summarizePickupState(pickup) {
@@ -624,25 +705,122 @@ function serializeOnlineState() {
 
 function revivePlayerFromState(player, snapshot) {
     if (!player || !snapshot) return;
-    player.x = snapshot.x;
-    player.y = snapshot.y;
-    player.hp = snapshot.hp;
-    player.dirX = snapshot.dirX;
-    player.dirY = snapshot.dirY;
-    player.spinAngle = snapshot.spinAngle;
-    player.dashCooldown = snapshot.dashCooldown;
-    player.shootCooldown = snapshot.shootCooldown;
-    player.specialCooldown = snapshot.specialCooldown;
-    player.isDashing = snapshot.isDashing;
-    player.isHoldingShoot = snapshot.isHoldingShoot;
-    player.isEliminated = snapshot.isEliminated;
+    if (snapshot.build && snapshot.build !== player.build && BUILDS[snapshot.build]) {
+        player.build = snapshot.build;
+        player.buildCfg = BUILDS[snapshot.build];
+    }
+    if (typeof snapshot.maxHp === 'number') {
+        player.maxHp = snapshot.maxHp;
+    }
+    ONLINE_PLAYER_SYNC_FIELDS.forEach((field) => {
+        if (Object.prototype.hasOwnProperty.call(snapshot, field)) {
+            player[field] = snapshot[field];
+        }
+    });
     player.updateUI();
+}
+
+function reviveBulletFromState(snapshot) {
+    if (!snapshot) return null;
+    const bullet = new Bullet(
+        snapshot.ownerId,
+        snapshot.x,
+        snapshot.y,
+        snapshot.dirX,
+        snapshot.dirY,
+        snapshot.color,
+        {
+            damage: snapshot.damage,
+            type: snapshot.type,
+            speed: snapshot.speed,
+            radius: snapshot.radius,
+            maxBounces: snapshot.maxBounces,
+            scale: snapshot.scale,
+            isNinjaStar: snapshot.isNinjaStar,
+            isScythe: snapshot.isScythe,
+            returning: snapshot.returning,
+            lastHitTimes: snapshot.lastHitTimes,
+            createdTime: snapshot.createdTime,
+            maxDistance: snapshot.maxDistance,
+            minDamageMult: snapshot.minDamageMult,
+            trackTargetId: snapshot.trackTargetId,
+            turnRate: snapshot.turnRate,
+            fromClone: snapshot.fromClone,
+            waveBurnDuration: snapshot.waveBurnDuration,
+            pullStrength: snapshot.pullStrength,
+            returnSpeed: snapshot.returnSpeed,
+            hookedTargetId: snapshot.hookedTargetId,
+            hookHasDamaged: snapshot.hookHasDamaged,
+        }
+    );
+    bullet.bounces = snapshot.bounces ?? 0;
+    bullet.ninjaStarRotation = snapshot.ninjaStarRotation ?? 0;
+    bullet.rotation = snapshot.rotation ?? 0;
+    bullet.cardRotation = snapshot.cardRotation ?? 0;
+    bullet.lifetime = snapshot.lifetime ?? bullet.lifetime;
+    bullet.distanceTraveled = snapshot.distanceTraveled ?? 0;
+    bullet.active = snapshot.active !== false;
+    return bullet;
+}
+
+function reviveSummonFromState(snapshot) {
+    if (!snapshot) return null;
+    if ((snapshot.type ?? 'clone') === 'clone') {
+        const clone = new Clone(snapshot.ownerId, snapshot.x, snapshot.y, snapshot.color);
+        clone.radius = snapshot.radius ?? clone.radius;
+        clone.hp = snapshot.hp ?? clone.hp;
+        clone.fireTimer = snapshot.fireTimer ?? clone.fireTimer;
+        clone.lifeTime = snapshot.lifeTime ?? clone.lifeTime;
+        clone.dirX = snapshot.dirX ?? clone.dirX;
+        clone.dirY = snapshot.dirY ?? clone.dirY;
+        clone.speed = snapshot.speed ?? clone.speed;
+        clone.active = snapshot.active !== false;
+        return clone;
+    }
+    if (snapshot.type === 'trapmine') {
+        const cfg = BUILDS.trapper;
+        const mine = new TrapMine(snapshot.ownerId, snapshot.x, snapshot.y, snapshot.color, cfg, snapshot.damage ?? cfg.mineDamage);
+        mine.radius = snapshot.radius ?? mine.radius;
+        mine.blastRadius = snapshot.blastRadius ?? mine.blastRadius;
+        mine.triggerDelay = snapshot.triggerDelay ?? mine.triggerDelay;
+        mine.flashTimer = snapshot.flashTimer ?? mine.flashTimer;
+        mine.triggered = !!snapshot.triggered;
+        mine.createdAt = snapshot.createdAt ?? mine.createdAt;
+        mine.active = snapshot.active !== false;
+        return mine;
+    }
+    if (snapshot.type === 'traplink') {
+        const link = new TrapLink(snapshot.ownerId, snapshot.x1, snapshot.y1, snapshot.x2, snapshot.y2, snapshot.color);
+        link.x = snapshot.x ?? link.x;
+        link.y = snapshot.y ?? link.y;
+        link.radius = snapshot.radius ?? link.radius;
+        link.lifeTime = snapshot.lifeTime ?? link.lifeTime;
+        link.hitCooldown = snapshot.hitCooldown ?? link.hitCooldown;
+        link.active = snapshot.active !== false;
+        return link;
+    }
+    return null;
+}
+
+function revivePickupFromState(snapshot) {
+    if (!snapshot) return null;
+    const pickup = new Pickup(snapshot.type, snapshot.x, snapshot.y);
+    pickup.active = snapshot.active !== false;
+    return pickup;
 }
 
 function applyOnlineState(state) {
     if (!state || !p1 || !p2) return;
     revivePlayerFromState(p1, state.p1);
     revivePlayerFromState(p2, state.p2);
+    bullets = Array.isArray(state.bullets) ? state.bullets.map(reviveBulletFromState).filter(Boolean) : [];
+    summons = Array.isArray(state.summons) ? state.summons.map(reviveSummonFromState).filter(Boolean) : [];
+    pickups = Array.isArray(state.pickups) ? state.pickups.map(revivePickupFromState).filter(Boolean) : [];
+    if (typeof state.pickupSpawnTimer === 'number') {
+        pickupSpawnTimer = state.pickupSpawnTimer;
+    }
+    gameOver = !!state.gameOver;
+    roundEndActive = !!state.roundEndActive;
 }
 
 function sendOnlineStateIfChanged(timestamp) {
@@ -653,7 +831,8 @@ function sendOnlineStateIfChanged(timestamp) {
     if (signature === lastOnlineStateSignature) return;
     lastOnlineStateSentAt = timestamp;
     lastOnlineStateSignature = signature;
-    socket.emit('online-state', { roomCode, state: payload });
+    onlineStateSequence += 1;
+    socket.emit('online-state', { roomCode, state: payload, sequence: onlineStateSequence });
 }
 
 
