@@ -4,9 +4,7 @@ Orbit Duel is a browser arena fighter built with plain HTML, CSS, and JavaScript
 
 ## How To Run
 
-- Install dependencies with `npm install`
-- Start the Railway-friendly server with `npm start`
-- Open `http://localhost:3000`
+Click link: https://sir0reo.github.io/Orbit-Duel/
 
 ## Current Flow
 
