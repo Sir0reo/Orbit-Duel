@@ -332,12 +332,10 @@ let onlineLocalPlayerId = 1;
 let onlineIsHost = false;
 let suppressOnlineBuildBroadcast = false;
 let lastOnlineInputSignature = '';
-let lastOnlineStateSentAt = 0;
 const onlineInputState = {
     1: { dashDown: false, shootDown: false, specialDown: false },
     2: { dashDown: false, shootDown: false, specialDown: false },
 };
-const ONLINE_STATE_INTERVAL_MS = 1000 / 30;
 const ONLINE_SERVER_URL_STORAGE_KEY = 'orbit-duel-server-url';
 const secretCheatState = {
     '.': [],
@@ -515,11 +513,6 @@ function initializeSocketConnection() {
         onlineInputState[playerId] = { ...onlineInputState[playerId], ...inputs };
     });
 
-    socket.on('online-state', ({ state }) => {
-        if (!isOnlineMode() || onlineIsHost) return;
-        applyOnlineState(state);
-    });
-
     socket.on('room-ended', ({ message }) => {
         roomCode = '';
         onlineIsHost = false;
@@ -536,11 +529,6 @@ function initializeSocketConnection() {
         setOnlineControlsDisabled(false);
     });
 
-    socket.on('online-game-over', ({ winnerId }) => {
-        if (!isOnlineMode() || onlineIsHost) return;
-        endGame(winnerId);
-    });
-
     return socket;
 }
 
@@ -554,60 +542,6 @@ function sendOnlineInputs(force = false) {
     socket.emit('online-input', { roomCode, playerId: onlineLocalPlayerId, inputs: snapshot });
 }
 
-function cloneNetworkObject(value) {
-    return value == null ? value : JSON.parse(JSON.stringify(value));
-}
-
-function serializeOnlineState() {
-    return {
-        p1: cloneNetworkObject(p1),
-        p2: cloneNetworkObject(p2),
-        bullets: cloneNetworkObject(bullets),
-        summons: cloneNetworkObject(summons),
-        pickups: cloneNetworkObject(pickups),
-    };
-}
-
-function revivePlayer(snapshot) {
-    if (!snapshot) return null;
-    const player = Object.assign(Object.create(Player.prototype), snapshot);
-    player.buildCfg = BUILDS[player.build] ?? BUILDS.gunner;
-    return player;
-}
-
-function reviveBullet(snapshot) {
-    return Object.assign(Object.create(Bullet.prototype), snapshot);
-}
-
-function reviveSummon(snapshot) {
-    if (!snapshot) return snapshot;
-    const proto = snapshot.type === 'trapmine'
-        ? TrapMine.prototype
-        : (snapshot.type === 'traplink' ? TrapLink.prototype : Clone.prototype);
-    return Object.assign(Object.create(proto), snapshot);
-}
-
-function revivePickup(snapshot) {
-    return Object.assign(Object.create(Pickup.prototype), snapshot);
-}
-
-function applyOnlineState(state) {
-    if (!state) return;
-    p1 = revivePlayer(state.p1);
-    p2 = revivePlayer(state.p2);
-    bullets = (state.bullets ?? []).map(reviveBullet);
-    summons = (state.summons ?? []).map(reviveSummon);
-    pickups = (state.pickups ?? []).map(revivePickup);
-    p1?.updateUI();
-    p2?.updateUI();
-}
-
-function sendAuthoritativeOnlineState(timestamp) {
-    if (!isOnlineMode() || !onlineIsHost || !socket || !socket.connected || !roomCode) return;
-    if (timestamp - lastOnlineStateSentAt < ONLINE_STATE_INTERVAL_MS) return;
-    lastOnlineStateSentAt = timestamp;
-    socket.emit('online-state', { roomCode, state: serializeOnlineState() });
-}
 
 const BOT_DIFFICULTY_CONFIG = {
     easy: {
@@ -4450,7 +4384,6 @@ function initGame() {
     pickupSpawnTimer = randBetween(PICKUP_SPAWN_MIN, PICKUP_SPAWN_MAX);
     
     lastTime = performance.now();
-    lastOnlineStateSentAt = 0;
     sendOnlineInputs(true);
     requestAnimationFrame(gameLoop);
 }
@@ -4507,9 +4440,6 @@ function startRoundFromMenu() {
 }
 
 function endGame(winnerId) {
-    if (isOnlineMode() && onlineIsHost && socket && roomCode) {
-        socket.emit('online-game-over', { roomCode, winnerId });
-    }
     gameOver = true;
     roundEndActive = false;
     if (koRevealTimeout) {
@@ -4626,55 +4556,51 @@ function gameLoop(timestamp) {
     drawArena();
 
     if (!gameOver && !inMenu) {
-        if (!isOnlineMode() || onlineIsHost) {
-            p1.update(dt);
-            p2.update(dt);
-            resolvePlayerCollision(p1, p2);
-            
-            // Update bullets and remove inactive ones
-            bullets.forEach(b => b.update(dt));
-            bullets = bullets.filter(b => b.active);
+        p1.update(dt);
+        p2.update(dt);
+        resolvePlayerCollision(p1, p2);
+        
+        // Update bullets and remove inactive ones
+        bullets.forEach(b => b.update(dt));
+        bullets = bullets.filter(b => b.active);
 
-            // Update particles
-            particles.forEach(p => p.update(dt));
-            particles = particles.filter(p => p.active);
+        // Update particles
+        particles.forEach(p => p.update(dt));
+        particles = particles.filter(p => p.active);
 
-            summons.forEach(s => s.update(dt));
-            summons = summons.filter(s => s.active);
-            summons.forEach(s => {
-                resolveJuggernautCloneCollision(p1, s);
-                resolveJuggernautCloneCollision(p2, s);
-            });
+        summons.forEach(s => s.update(dt));
+        summons = summons.filter(s => s.active);
+        summons.forEach(s => {
+            resolveJuggernautCloneCollision(p1, s);
+            resolveJuggernautCloneCollision(p2, s);
+        });
 
-            // Spawn pickups (medkit/syringe)
-            pickupSpawnTimer -= dt;
-            if (pickupSpawnTimer <= 0) {
-                spawnPickup();
-                pickupSpawnTimer = randBetween(PICKUP_SPAWN_MIN, PICKUP_SPAWN_MAX);
-            }
-
-            // Handle pickup collisions (first touch wins)
-            pickups.forEach(pk => {
-                if (!pk.active) return;
-                const dist1 = Math.hypot(pk.x - p1.x, pk.y - p1.y);
-                if (dist1 <= BALL_RADIUS + PICKUP_RADIUS) {
-                    if (pk.type === 'medkit') p1.heal(MEDKIT_HEAL);
-                    else if (pk.type === 'syringe') p1.nextAttackDamageMult = SYRINGE_MULT;
-                    pk.active = false;
-                    return;
-                }
-                const dist2 = Math.hypot(pk.x - p2.x, pk.y - p2.y);
-                if (dist2 <= BALL_RADIUS + PICKUP_RADIUS) {
-                    if (pk.type === 'medkit') p2.heal(MEDKIT_HEAL);
-                    else if (pk.type === 'syringe') p2.nextAttackDamageMult = SYRINGE_MULT;
-                    pk.active = false;
-                }
-            });
-            pickups = pickups.filter(pk => pk.active);
-            sendAuthoritativeOnlineState(timestamp);
-        } else {
-            sendOnlineInputs();
+        // Spawn pickups (medkit/syringe)
+        pickupSpawnTimer -= dt;
+        if (pickupSpawnTimer <= 0) {
+            spawnPickup();
+            pickupSpawnTimer = randBetween(PICKUP_SPAWN_MIN, PICKUP_SPAWN_MAX);
         }
+
+        // Handle pickup collisions (first touch wins)
+        pickups.forEach(pk => {
+            if (!pk.active) return;
+            const dist1 = Math.hypot(pk.x - p1.x, pk.y - p1.y);
+            if (dist1 <= BALL_RADIUS + PICKUP_RADIUS) {
+                if (pk.type === 'medkit') p1.heal(MEDKIT_HEAL);
+                else if (pk.type === 'syringe') p1.nextAttackDamageMult = SYRINGE_MULT;
+                pk.active = false;
+                return;
+            }
+            const dist2 = Math.hypot(pk.x - p2.x, pk.y - p2.y);
+            if (dist2 <= BALL_RADIUS + PICKUP_RADIUS) {
+                if (pk.type === 'medkit') p2.heal(MEDKIT_HEAL);
+                else if (pk.type === 'syringe') p2.nextAttackDamageMult = SYRINGE_MULT;
+                pk.active = false;
+            }
+        });
+        pickups = pickups.filter(pk => pk.active);
+        if (isOnlineMode()) sendOnlineInputs();
     } else if (roundEndActive && !inMenu) {
         particles.forEach(p => p.update(dt));
         particles = particles.filter(p => p.active);
@@ -4701,20 +4627,20 @@ function resizeCanvas() {
     const shortestSide = Math.min(viewportWidth, viewportHeight);
 
     // Keep one shared gameplay coordinate system and only scale the rendered canvas.
-    let displayScale = 0.9;
+    let displayScale = 1.0;
 
-    if (shortestSide <= 1400) displayScale = 0.86;
-    if (shortestSide <= 1200) displayScale = 0.82;
-    if (shortestSide <= 1000) displayScale = 0.78;
-    if (shortestSide <= 850) displayScale = 0.74;
-    if (shortestSide <= 700) displayScale = 0.7;
-    if (shortestSide <= 560) displayScale = 0.66;
-    if (shortestSide <= 430) displayScale = 0.62;
+    if (shortestSide <= 1400) displayScale = 0.97;
+    if (shortestSide <= 1200) displayScale = 0.94;
+    if (shortestSide <= 1000) displayScale = 0.91;
+    if (shortestSide <= 850) displayScale = 0.88;
+    if (shortestSide <= 700) displayScale = 0.84;
+    if (shortestSide <= 560) displayScale = 0.8;
+    if (shortestSide <= 430) displayScale = 0.76;
 
     let displaySize = Math.min(viewportWidth * displayScale, viewportHeight * displayScale);
 
     if (viewportWidth > viewportHeight && viewportWidth <= 768) {
-        displaySize = Math.min(viewportWidth * Math.min(displayScale + 0.04, 0.76), viewportHeight * Math.min(displayScale + 0.04, 0.76));
+        displaySize = Math.min(viewportWidth * Math.min(displayScale + 0.03, 0.9), viewportHeight * Math.min(displayScale + 0.03, 0.9));
     }
 
     canvas.width = BASE_CANVAS_SIZE;
