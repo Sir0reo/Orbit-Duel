@@ -332,10 +332,13 @@ let onlineLocalPlayerId = 1;
 let onlineIsHost = false;
 let suppressOnlineBuildBroadcast = false;
 let lastOnlineInputSignature = '';
+let lastOnlineStateSentAt = 0;
+let lastOnlineStateSignature = '';
 const onlineInputState = {
     1: { dashDown: false, shootDown: false, specialDown: false },
     2: { dashDown: false, shootDown: false, specialDown: false },
 };
+const ONLINE_STATE_INTERVAL_MS = 1000 / 12;
 const ONLINE_SERVER_URL_STORAGE_KEY = 'orbit-duel-server-url';
 const secretCheatState = {
     '.': [],
@@ -350,6 +353,8 @@ function resetOnlineInputs() {
     onlineInputState[1] = { dashDown: false, shootDown: false, specialDown: false };
     onlineInputState[2] = { dashDown: false, shootDown: false, specialDown: false };
     lastOnlineInputSignature = '';
+    lastOnlineStateSentAt = 0;
+    lastOnlineStateSignature = '';
 }
 
 function getOnlineLocalInputSnapshot() {
@@ -513,6 +518,11 @@ function initializeSocketConnection() {
         onlineInputState[playerId] = { ...onlineInputState[playerId], ...inputs };
     });
 
+    socket.on('online-state', ({ state }) => {
+        if (!isOnlineMode() || onlineIsHost || !state) return;
+        applyOnlineState(state);
+    });
+
     socket.on('room-ended', ({ message }) => {
         roomCode = '';
         onlineIsHost = false;
@@ -540,6 +550,110 @@ function sendOnlineInputs(force = false) {
     if (!force && signature === lastOnlineInputSignature) return;
     lastOnlineInputSignature = signature;
     socket.emit('online-input', { roomCode, playerId: onlineLocalPlayerId, inputs: snapshot });
+}
+
+function roundNet(value, precision = 10) {
+    return Math.round(value * precision) / precision;
+}
+
+function summarizePlayerState(player) {
+    if (!player) return null;
+    return {
+        x: roundNet(player.x),
+        y: roundNet(player.y),
+        hp: Math.round(player.hp),
+        dirX: roundNet(player.dirX, 100),
+        dirY: roundNet(player.dirY, 100),
+        spinAngle: roundNet(player.spinAngle, 100),
+        dashCooldown: roundNet(player.dashCooldown, 100),
+        shootCooldown: roundNet(player.shootCooldown, 100),
+        specialCooldown: roundNet(player.specialCooldown, 100),
+        isDashing: !!player.isDashing,
+        isHoldingShoot: !!player.isHoldingShoot,
+        build: player.build,
+        isEliminated: !!player.isEliminated,
+    };
+}
+
+function summarizeBulletState(bullet) {
+    return {
+        type: bullet.type,
+        ownerId: bullet.ownerId,
+        x: roundNet(bullet.x),
+        y: roundNet(bullet.y),
+        dirX: roundNet(bullet.dirX, 100),
+        dirY: roundNet(bullet.dirY, 100),
+        radius: roundNet(bullet.radius, 100),
+        damage: Math.round(bullet.damage),
+        active: !!bullet.active,
+    };
+}
+
+function summarizeSummonState(summon) {
+    return {
+        type: summon.type ?? 'clone',
+        ownerId: summon.ownerId,
+        x: roundNet(summon.x),
+        y: roundNet(summon.y),
+        radius: roundNet(summon.radius, 100),
+        active: !!summon.active,
+    };
+}
+
+function summarizePickupState(pickup) {
+    return {
+        type: pickup.type,
+        x: roundNet(pickup.x),
+        y: roundNet(pickup.y),
+        active: !!pickup.active,
+    };
+}
+
+function serializeOnlineState() {
+    return {
+        p1: summarizePlayerState(p1),
+        p2: summarizePlayerState(p2),
+        bullets: bullets.map(summarizeBulletState),
+        summons: summons.map(summarizeSummonState),
+        pickups: pickups.map(summarizePickupState),
+        pickupSpawnTimer: roundNet(pickupSpawnTimer, 100),
+        gameOver,
+        roundEndActive,
+    };
+}
+
+function revivePlayerFromState(player, snapshot) {
+    if (!player || !snapshot) return;
+    player.x = snapshot.x;
+    player.y = snapshot.y;
+    player.hp = snapshot.hp;
+    player.dirX = snapshot.dirX;
+    player.dirY = snapshot.dirY;
+    player.spinAngle = snapshot.spinAngle;
+    player.dashCooldown = snapshot.dashCooldown;
+    player.shootCooldown = snapshot.shootCooldown;
+    player.specialCooldown = snapshot.specialCooldown;
+    player.isDashing = snapshot.isDashing;
+    player.isHoldingShoot = snapshot.isHoldingShoot;
+    player.isEliminated = snapshot.isEliminated;
+    player.updateUI();
+}
+
+function applyOnlineState(state) {
+    if (!state || !p1 || !p2) return;
+    revivePlayerFromState(p1, state.p1);
+    revivePlayerFromState(p2, state.p2);
+}
+
+function sendOnlineStateIfChanged(timestamp) {
+    if (!isOnlineMode() || !onlineIsHost || !socket || !socket.connected || !roomCode || inMenu) return;
+    if (timestamp - lastOnlineStateSentAt < ONLINE_STATE_INTERVAL_MS) return;
+    const payload = serializeOnlineState();
+    const signature = JSON.stringify(payload);
+    if (signature === lastOnlineStateSignature) return;
+    lastOnlineStateSentAt = timestamp;
+    lastOnlineStateSignature = signature;
+    socket.emit('online-state', { roomCode, state: payload });
 }
 
 
@@ -4600,7 +4714,10 @@ function gameLoop(timestamp) {
             }
         });
         pickups = pickups.filter(pk => pk.active);
-        if (isOnlineMode()) sendOnlineInputs();
+        if (isOnlineMode()) {
+            sendOnlineInputs();
+            sendOnlineStateIfChanged(timestamp);
+        }
     } else if (roundEndActive && !inMenu) {
         particles.forEach(p => p.update(dt));
         particles = particles.filter(p => p.active);
