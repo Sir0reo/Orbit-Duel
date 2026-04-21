@@ -80,18 +80,37 @@ const PYRO_IGNITE_DELAY = 0.12;
 const PYRO_BURN_DAMAGE_PER_SEC = 10;
 const JUGGERNAUT_COLLISION_DAMAGE = 50;
 const JUGGERNAUT_COLLISION_COOLDOWN = 0.35;
-const TRAPPER_MINE_DAMAGE = 150;
+const TRAPPER_MINE_DAMAGE = 100;
 const TRAPPER_MAX_MINES = 3;
-const TRAPPER_MINE_RADIUS = 8;
+const TRAPPER_MINE_RADIUS = 5;
 const TRAPPER_BLAST_RADIUS = 56;
-const TRAPPER_TRIGGER_DELAY = 0.75;
-const GAMBLER_CARD_MIN_DAMAGE = 50;
+const TRAPPER_TRIGGER_DELAY = 0.6;
+const GAMBLER_CARD_MIN_DAMAGE = 25;
 const GAMBLER_CARD_MAX_DAMAGE = 125;
 const TRAPPER_LINK_DAMAGE = 50;
-const TRAPPER_LINK_DURATION = 5.0;
+const TRAPPER_LINK_DURATION = 3.0;
 const TRAPPER_LINK_SLOW_DURATION = 0;
 const GAMBLER_SLOW_MULT = 1 / 3;
 const GAMBLER_SLOW_DURATION = 5.0;
+const BERSERKER_BASE_ATTACK_DAMAGE = 50;
+const BERSERKER_SLASH_HALF_ANGLE = 60 * Math.PI / 180;
+const BERSERKER_SLASH_RANGE = 96;
+const BERSERKER_SLASH_FX_DURATION = 0.18;
+const BERSERKER_SECOND_SLASH_DELAY = 0.1;
+const BERSERKER_DASH_DURATION = 0.16;
+const BERSERKER_BONUS_POINTS = [
+    { hp: 1000, bonus: 0.0 },
+    { hp: 750, bonus: 0.25 },
+    { hp: 500, bonus: 0.5 },
+    { hp: 250, bonus: 0.75 },
+    { hp: 100, bonus: 1.0 },
+    { hp: 0, bonus: 1.0 },
+];
+const NETRUNNER_BOLT_SPEED = BULLET_SPEED * 0.95;
+const NETRUNNER_BOLT_GAP = 0.014;
+const NETRUNNER_COOLDOWN_FREEZE = 2.0;
+const NETRUNNER_GLITCH_DURATION = 7.0;
+const NETRUNNER_WOBBLE_DURATION = 0.35;
 
 /** Ninja star follow-up slash */
 const NINJA_SLASH_DURATION = 0.33;
@@ -158,6 +177,9 @@ function drawScytheWeapon(ctx) {
     ctx.closePath();
     ctx.fill();
 }
+
+const berserkerAxesImage = new Image();
+berserkerAxesImage.src = 'ax.webp';
 
 const BUILDS = {
     gunner: {
@@ -285,8 +307,8 @@ const BUILDS = {
     trapper: {
         name: 'Trapper',
         maxHp: 1000,
-        shootCooldown: 2.5,
-        abilityCooldown: 20.0,
+        shootCooldown: 3.0,
+        abilityCooldown: 25.0,
         abilityStartsOnCooldown: true,
         mineDamage: TRAPPER_MINE_DAMAGE,
         maxMines: TRAPPER_MAX_MINES,
@@ -297,13 +319,45 @@ const BUILDS = {
     gambler: {
         name: 'Gambler',
         maxHp: 1000,
-        shootCooldown: 3.0,
+        shootCooldown: 3.5,
         abilityCooldown: 25.0,
         abilityStartsOnCooldown: true,
         cardMinDamage: GAMBLER_CARD_MIN_DAMAGE,
         cardMaxDamage: GAMBLER_CARD_MAX_DAMAGE,
         cardBounces: 2,
         tripleShotSpreadDeg: 20,
+    },
+    berserker: {
+        name: 'Berserker',
+        maxHp: 1000,
+        shootCooldown: 2.0,
+        abilityCooldown: 20.0,
+        abilityStartsOnCooldown: true,
+        slashDamage: BERSERKER_BASE_ATTACK_DAMAGE,
+        slashRange: BERSERKER_SLASH_RANGE,
+        slashHalfAngle: BERSERKER_SLASH_HALF_ANGLE,
+        slashKnockback: 42,
+        secondSlashDelay: BERSERKER_SECOND_SLASH_DELAY,
+        rageDuration: 7.5,
+        rageDamageReduction: 0.3,
+        rageConeScale: 1.5,
+        rageCooldownMult: 0.5,
+        rageSequenceSpeedMult: 1.75,
+        rageDashDuration: BERSERKER_DASH_DURATION,
+        rageDashSpeed: 1100,
+    },
+    netrunner: {
+        name: 'Netrunner',
+        maxHp: 1000,
+        shootCooldown: 2,
+        abilityCooldown: 35.0,
+        abilityStartsOnCooldown: true,
+        boltDamage: 35,
+        boltPauseDuration: NETRUNNER_COOLDOWN_FREEZE,
+        boltRadius: BULLET_RADIUS * 0.9,
+        boltGap: NETRUNNER_BOLT_GAP,
+        glitchDuration: NETRUNNER_GLITCH_DURATION,
+        glitchDamage: 50,
     }
 };
 
@@ -341,6 +395,10 @@ const onlineInputState = {
     2: { dashDown: false, shootDown: false, specialDown: false },
 };
 const ONLINE_STATE_INTERVAL_MS = 1000 / 30;
+const ONLINE_STATE_SNAP_DISTANCE = 120;
+const ONLINE_LOCAL_PLAYER_RECONCILE = 0.18;
+const ONLINE_REMOTE_PLAYER_RECONCILE = 0.35;
+const ONLINE_AIM_RECONCILE = 0.28;
 const ONLINE_SERVER_URL_STORAGE_KEY = 'orbit-duel-server-url';
 const ONLINE_PLAYER_SYNC_FIELDS = [
     'x', 'y', 'hp', 'dirX', 'dirY', 'spinAngle', 'dashTimer', 'dashCooldown', 'isDashing',
@@ -357,6 +415,11 @@ const ONLINE_PLAYER_SYNC_FIELDS = [
     'pyroAmmo', 'pyroFiring', 'pyroTargetInsideCone', 'pyroTickTimer', 'pyroIgniteTimer', 'pyroWaveTime', 'pyroWaveRadius', 'pyroWaveHit',
     'gamblerBigCardReady', 'gamblerTripleShotReady', 'gamblerHealTime', 'gamblerHealRate', 'gamblerShockTime',
     'juggernautPullTime', 'juggernautInvulnTime',
+    'berserkerRageTime', 'berserkerAttackTime', 'berserkerSecondSlashTimer', 'berserkerPendingSecondSlash',
+    'berserkerSlash1FxTime', 'berserkerSlash2FxTime', 'berserkerAttackBaseAngle', 'berserkerAttackDamageMult',
+    'berserkerDashTime', 'berserkerDashAngle',
+    'cooldownFreezeTime', 'netrunnerBurstTime', 'netrunnerBoltTimer', 'netrunnerBoltsRemaining',
+    'netrunnerBoltPairId', 'netrunnerBurstGroupId', 'netrunnerIntangibleTime', 'netrunnerWobbleTime',
     'isEliminated'
 ];
 const secretCheatState = {
@@ -579,6 +642,21 @@ function roundNet(value, precision = 10) {
     return Math.round(value * precision) / precision;
 }
 
+function lerp(start, end, amount) {
+    return start + (end - start) * amount;
+}
+
+function blendAngle(current, target, amount) {
+    return current + normalizeAngle(target - current) * amount;
+}
+
+function getOnlinePlayerReconcileAmount(playerId) {
+    if (!isOnlineMode() || onlineIsHost) return 1;
+    return playerId === onlineLocalPlayerId
+        ? ONLINE_LOCAL_PLAYER_RECONCILE
+        : ONLINE_REMOTE_PLAYER_RECONCILE;
+}
+
 function summarizePlayerState(player) {
     if (!player) return null;
     const snapshot = {
@@ -629,6 +707,9 @@ function summarizeBulletState(bullet) {
         returnSpeed: roundNet(bullet.returnSpeed ?? bullet.speed ?? 0, 100),
         hookedTargetId: bullet.hookedTargetId ?? null,
         hookHasDamaged: !!bullet.hookHasDamaged,
+        cooldownFreeze: roundNet(bullet.cooldownFreeze ?? 0, 100),
+        linkGroup: bullet.linkGroup ?? null,
+        linkIndex: bullet.linkIndex ?? 0,
         lastHitTimes: bullet.lastHitTimes ? { ...bullet.lastHitTimes } : { 1: 0, 2: 0 },
         createdTime: roundNet(bullet.createdTime ?? 0, 100),
         active: !!bullet.active,
@@ -712,11 +793,42 @@ function revivePlayerFromState(player, snapshot) {
     if (typeof snapshot.maxHp === 'number') {
         player.maxHp = snapshot.maxHp;
     }
+    const reconcileAmount = getOnlinePlayerReconcileAmount(player.id);
     ONLINE_PLAYER_SYNC_FIELDS.forEach((field) => {
         if (Object.prototype.hasOwnProperty.call(snapshot, field)) {
+            if (field === 'x' || field === 'y' || field === 'dirX' || field === 'dirY' || field === 'spinAngle') {
+                return;
+            }
             player[field] = snapshot[field];
         }
     });
+    if (typeof snapshot.x === 'number' && typeof snapshot.y === 'number') {
+        const delta = Math.hypot(snapshot.x - player.x, snapshot.y - player.y);
+        if (reconcileAmount >= 1 || delta >= ONLINE_STATE_SNAP_DISTANCE) {
+            player.x = snapshot.x;
+            player.y = snapshot.y;
+        } else {
+            player.x = lerp(player.x, snapshot.x, reconcileAmount);
+            player.y = lerp(player.y, snapshot.y, reconcileAmount);
+        }
+    }
+    if (typeof snapshot.dirX === 'number' && typeof snapshot.dirY === 'number') {
+        if (reconcileAmount >= 1) {
+            player.dirX = snapshot.dirX;
+            player.dirY = snapshot.dirY;
+        } else {
+            player.dirX = lerp(player.dirX, snapshot.dirX, ONLINE_AIM_RECONCILE);
+            player.dirY = lerp(player.dirY, snapshot.dirY, ONLINE_AIM_RECONCILE);
+            const dirLen = Math.hypot(player.dirX, player.dirY) || 1;
+            player.dirX /= dirLen;
+            player.dirY /= dirLen;
+        }
+    }
+    if (typeof snapshot.spinAngle === 'number') {
+        player.spinAngle = reconcileAmount >= 1
+            ? snapshot.spinAngle
+            : blendAngle(player.spinAngle, snapshot.spinAngle, ONLINE_AIM_RECONCILE);
+    }
     player.updateUI();
 }
 
@@ -751,6 +863,9 @@ function reviveBulletFromState(snapshot) {
             returnSpeed: snapshot.returnSpeed,
             hookedTargetId: snapshot.hookedTargetId,
             hookHasDamaged: snapshot.hookHasDamaged,
+            cooldownFreeze: snapshot.cooldownFreeze,
+            linkGroup: snapshot.linkGroup,
+            linkIndex: snapshot.linkIndex,
         }
     );
     bullet.bounces = snapshot.bounces ?? 0;
@@ -965,6 +1080,18 @@ const BUILD_MENU_INFO = {
         primary: 'Throws a spinning poker card that bounces off the arena border twice. Every card rolls random damage.',
         ability: 'Triggers one of five random outcomes: heal, enemy slow, self damage, big card, or triple shot.',
         statValues: { hp: 1000, damage: 150, primaryCd: 2.0, abilityCd: 25.0 }
+    },
+    berserker: {
+        build: 'axe blender with low-hp scaling',
+        primary: 'Performs two fast cone slashes that can both connect in the center. Damage and movement speed scale up as HP drops.',
+        ability: 'Dashes forward and enters rage, gaining wider slashes, faster attacks, reduced incoming damage, and a flaming red aura.',
+        statValues: { hp: 1000, damage: 128, primaryCd: 2.0, abilityCd: 35.0 }
+    },
+    netrunner: {
+        build: 'cooldown thief hacker',
+        primary: 'Fires two disruption bolts that deal no damage but freeze the target’s primary and ability cooldown timers for 2 seconds.',
+        ability: 'Instantly glitches the opponent for 50 damage, then becomes intangible so attacks and projectiles pass straight through for 5 seconds.',
+        statValues: { hp: 1000, damage: 50, primaryCd: 2.5, abilityCd: 35.0 }
     },
 };
 
@@ -1340,11 +1467,14 @@ function trackSecretCheat(key) {
 function getPlayerMoveVector(player) {
     const buildMoveMult = player.build === 'swordsman'
         ? 1.3
-        : (player.build === 'juggernaut' ? (player.buildCfg.speedMult ?? 1) : 1);
+        : (player.build === 'juggernaut'
+            ? (player.buildCfg.speedMult ?? 1)
+            : (player.build === 'netrunner' ? 1.25 : 1));
     const moveBase = BALL_BASE_SPEED * buildMoveMult;
     const specialMult = (player.build === 'gunner' && player.isSpecialFiring) ? 0.5 : 1;
     const holdMult = (player.build === 'gunner' && player.isHoldingShoot && player.shootHoldTime >= HOLD_SLOW_DELAY) ? HOLD_SLOW_MULT : 1;
     let speedMult = 1;
+    if (player.build === 'berserker') speedMult *= 1 + getBerserkerBonusFromHp(player.hp);
     if (player.reaperAbilityTime > 0) speedMult *= 1.3;
     if (player.reaperDebuffTime > 0) speedMult *= player.reaperDebuffSpeedMult;
     if (player.statusSlowTime > 0) speedMult *= player.statusSlowMult;
@@ -1380,6 +1510,43 @@ function isTargetInsideCone(originX, originY, angle, range, halfAngle, targetX, 
     if (dist > range + radius) return false;
     const rel = normalizeAngle(Math.atan2(dy, dx) - angle);
     return Math.abs(rel) <= halfAngle;
+}
+
+function isTargetInsideSlashSweep(originX, originY, startAngle, endAngle, range, halfAngle, targetX, targetY, radius = BALL_RADIUS) {
+    const dx = targetX - originX;
+    const dy = targetY - originY;
+    const dist = Math.hypot(dx, dy);
+    if (dist > range + radius) return false;
+    const sweepDelta = normalizeAngle(endAngle - startAngle);
+    const sweepMid = startAngle + sweepDelta * 0.5;
+    const sweepSpan = Math.abs(sweepDelta) * 0.5;
+    const targetAngle = Math.atan2(dy, dx);
+    return Math.abs(normalizeAngle(targetAngle - sweepMid)) <= sweepSpan + halfAngle;
+}
+
+function getBerserkerBonusFromHp(hp) {
+    for (let i = 0; i < BERSERKER_BONUS_POINTS.length - 1; i++) {
+        const high = BERSERKER_BONUS_POINTS[i];
+        const low = BERSERKER_BONUS_POINTS[i + 1];
+        if (hp <= high.hp && hp >= low.hp) {
+            const span = high.hp - low.hp || 1;
+            const t = (high.hp - hp) / span;
+            return high.bonus + (low.bonus - high.bonus) * t;
+        }
+    }
+    return BERSERKER_BONUS_POINTS[BERSERKER_BONUS_POINTS.length - 1].bonus;
+}
+
+function getBerserkerDamageBonusFromHp(hp) {
+    if (hp <= 100) return 0.6;
+    if (hp <= 250) return 0.45;
+    if (hp <= 500) return 0.25;
+    if (hp <= 750) return 0.1;
+    return 0;
+}
+
+function isPlayerIntangible(player) {
+    return !!(player && player.build === 'netrunner' && player.netrunnerIntangibleTime > 0);
 }
 
 function movePointToward(source, target, distance) {
@@ -1479,6 +1646,10 @@ function shouldBotUseSpecial(player, enemy, config, angleError, distance) {
             return summons.some(s => s.active && s.ownerId === player.id && s.type === 'trapmine');
         case 'gambler':
             return distance <= config.mediumRange;
+        case 'berserker':
+            return distance <= config.closeRange * 1.1;
+        case 'netrunner':
+            return distance <= config.mediumRange * 1.05;
         default:
             return false;
     }
@@ -1500,6 +1671,10 @@ function shouldBotUsePrimary(player, enemy, config, angleError, distance) {
                 : distance <= player.buildCfg.gravityRadius;
         case 'gambler':
             return angleError <= config.shootTolerance * 1.25 && distance <= config.mediumRange * 1.2;
+        case 'berserker':
+            return angleError <= config.shootTolerance * 1.55 && distance <= player.buildCfg.slashRange * 1.15;
+        case 'netrunner':
+            return angleError <= config.shootTolerance * 1.15 && distance <= config.mediumRange * 1.1;
         default:
             return angleError <= config.shootTolerance && distance <= config.mediumRange * 1.2;
     }
@@ -1564,6 +1739,11 @@ function getBotInputs(player, dt) {
             && distance <= player.buildCfg.flameRange * 1.08
             && angleError <= player.buildCfg.flameHalfAngle * 1.5;
         if (shouldKeepFlaming || shouldBotUsePrimary(player, enemy, config, angleError, distance)) {
+            inputs.shootDown = true;
+        }
+    } else if (player.build === 'netrunner') {
+        if (state.shootPulse > 0) {
+            state.shootPulse = Math.max(0, state.shootPulse - dt);
             inputs.shootDown = true;
         }
     } else if (state.shootPulse > 0) {
@@ -1644,6 +1824,7 @@ function releaseHookOnPlayer(playerId) {
 
 function resolvePlayerCollision(a, b) {
     if (!a || !b) return;
+    if (isPlayerIntangible(a) || isPlayerIntangible(b)) return;
     let dx = b.x - a.x;
     let dy = b.y - a.y;
     let dist = Math.hypot(dx, dy);
@@ -1853,13 +2034,38 @@ class Player {
         // Juggernaut
         this.juggernautPullTime = 0;
         this.juggernautInvulnTime = 0;
+
+        // Berserker
+        this.berserkerRageTime = 0;
+        this.berserkerAttackTime = 0;
+        this.berserkerSecondSlashTimer = 0;
+        this.berserkerPendingSecondSlash = false;
+        this.berserkerSlash1FxTime = 0;
+        this.berserkerSlash2FxTime = 0;
+        this.berserkerAttackBaseAngle = this.spinAngle;
+        this.berserkerAttackDamageMult = 1.0;
+        this.berserkerDashTime = 0;
+        this.berserkerDashAngle = this.spinAngle;
+
+        // Netrunner
+        this.cooldownFreezeTime = 0;
+        this.netrunnerBurstTime = 0;
+        this.netrunnerBoltTimer = 0;
+        this.netrunnerBoltsRemaining = 0;
+        this.netrunnerBoltPairId = 0;
+        this.netrunnerBurstGroupId = 0;
+        this.netrunnerIntangibleTime = 0;
+        this.netrunnerWobbleTime = 0;
     }
 
     update(dt) {
         // Handle Cooldowns
         if (this.dashCooldown > 0) this.dashCooldown -= dt;
-        if (this.shootCooldown > 0) this.shootCooldown -= dt;
-        if (this.specialCooldown > 0) this.specialCooldown -= dt;
+        if (this.cooldownFreezeTime > 0) this.cooldownFreezeTime -= dt;
+        if (this.cooldownFreezeTime <= 0) {
+            if (this.shootCooldown > 0) this.shootCooldown -= dt;
+            if (this.specialCooldown > 0) this.specialCooldown -= dt;
+        }
         if (this.reaperAbilityTime > 0) this.reaperAbilityTime -= dt;
         if (this.reaperDebuffTime > 0) this.reaperDebuffTime -= dt;
         if (this.statusSlowTime > 0) this.statusSlowTime -= dt;
@@ -1874,9 +2080,20 @@ class Player {
         if (this.pyroWaveTime > 0) this.pyroWaveTime -= dt;
         if (this.juggernautPullTime > 0) this.juggernautPullTime -= dt;
         if (this.juggernautInvulnTime > 0) this.juggernautInvulnTime -= dt;
+        if (this.berserkerRageTime > 0) this.berserkerRageTime -= dt;
+        if (this.berserkerAttackTime > 0) this.berserkerAttackTime -= dt;
+        if (this.berserkerSecondSlashTimer > 0) this.berserkerSecondSlashTimer -= dt;
+        if (this.berserkerSlash1FxTime > 0) this.berserkerSlash1FxTime -= dt;
+        if (this.berserkerSlash2FxTime > 0) this.berserkerSlash2FxTime -= dt;
+        const hadBerserkerDash = this.berserkerDashTime > 0;
+        if (this.berserkerDashTime > 0) this.berserkerDashTime -= dt;
         if (this.ninjaStrikeFxTime > 0) this.ninjaStrikeFxTime -= dt;
         if (this.gamblerHealTime > 0) this.gamblerHealTime -= dt;
         if (this.gamblerShockTime > 0) this.gamblerShockTime -= dt;
+        if (this.netrunnerBurstTime > 0) this.netrunnerBurstTime -= dt;
+        if (this.netrunnerBoltTimer > 0) this.netrunnerBoltTimer -= dt;
+        if (this.netrunnerIntangibleTime > 0) this.netrunnerIntangibleTime -= dt;
+        if (this.netrunnerWobbleTime > 0) this.netrunnerWobbleTime -= dt;
 
         if (this.swordAttackTime <= 0) this.swordDamageOverride = null;
         if (this.swordAbilityTime <= 0) this.swordAbilityDamageOverride = null;
@@ -1885,6 +2102,27 @@ class Player {
         if (this.pullTowardTime <= 0) {
             this.pullTowardStrength = 0;
             this.pullTargetId = null;
+        }
+        if (this.berserkerAttackTime <= 0) this.berserkerAttackTime = 0;
+        if (this.berserkerDashTime <= 0) this.berserkerDashTime = 0;
+        if (this.cooldownFreezeTime <= 0) this.cooldownFreezeTime = 0;
+        if (this.netrunnerIntangibleTime <= 0) this.netrunnerIntangibleTime = 0;
+        if (hadBerserkerDash && this.berserkerDashTime <= 0) {
+            this.dirX = Math.cos(this.berserkerDashAngle);
+            this.dirY = Math.sin(this.berserkerDashAngle);
+        }
+
+        if (this.berserkerPendingSecondSlash && this.berserkerSecondSlashTimer <= 0) {
+            this.berserkerAttackBaseAngle = this.spinAngle;
+            this.performBerserkerSlash(this.berserkerAttackBaseAngle + this.buildCfg.slashHalfAngle * 2, 2);
+            this.berserkerPendingSecondSlash = false;
+        }
+
+        while (this.build === 'netrunner' && this.netrunnerBoltsRemaining > 0 && this.netrunnerBoltTimer <= 0) {
+            const boltIndex = this.netrunnerBoltsRemaining === 2 ? 0 : 1;
+            this.fireNetrunnerBolt(this.netrunnerBurstGroupId, boltIndex);
+            this.netrunnerBoltsRemaining--;
+            this.netrunnerBoltTimer += this.buildCfg.boltGap;
         }
 
         // Handle Active Dash
@@ -2015,8 +2253,9 @@ class Player {
                 other.x,
                 other.y
             ));
+            const canHitPlayer = other && !isPlayerIntangible(other);
 
-            if (inCone && other && this.pyroTickTimer >= this.buildCfg.flameTickInterval) {
+            if (inCone && canHitPlayer && this.pyroTickTimer >= this.buildCfg.flameTickInterval) {
                 const ticks = Math.floor(this.pyroTickTimer / this.buildCfg.flameTickInterval);
                 this.pyroTickTimer -= ticks * this.buildCfg.flameTickInterval;
                 const damage = this.buildCfg.flameTickDamage * ticks * this.nextAttackDamageMult;
@@ -2025,11 +2264,11 @@ class Player {
                 screenShake.duration = Math.max(screenShake.duration, 0.018);
                 screenShake.intensity = Math.max(screenShake.intensity, 0.45);
             }
-            if (inCone && other) {
+            if (inCone && canHitPlayer) {
                 this.pyroIgniteTimer += dt;
             }
-            if (!inCone && this.pyroTargetInsideCone && other) {
-                if (this.pyroIgniteTimer >= PYRO_IGNITE_DELAY) {
+            if ((!inCone || !canHitPlayer) && this.pyroTargetInsideCone && other) {
+                if (canHitPlayer && this.pyroIgniteTimer >= PYRO_IGNITE_DELAY) {
                     other.applyBurn(this.buildCfg.burnDuration, this.buildCfg.burnDamagePerSec);
                 }
                 this.pyroIgniteTimer = 0;
@@ -2053,6 +2292,15 @@ class Player {
         } else if (this.build === 'gambler') {
             if (shootDown && !this._shootWasDown && this.shootCooldown <= 0) {
                 this.fireGamblerShot();
+                this.shootCooldown = this.buildCfg.shootCooldown * shootCdMult;
+            }
+        } else if (this.build === 'berserker') {
+            if (shootDown && !this._shootWasDown && this.shootCooldown <= 0) {
+                this.startBerserkerAttack();
+            }
+        } else if (this.build === 'netrunner') {
+            if (shootDown && !this._shootWasDown && this.shootCooldown <= 0) {
+                this.startNetrunnerBurst();
                 this.shootCooldown = this.buildCfg.shootCooldown * shootCdMult;
             }
         }
@@ -2086,7 +2334,7 @@ class Player {
                     const targetY = other.y + Math.sin(behindAngle) * distFromOther;
                     const prevX = this.x;
                     const prevY = this.y;
-                    spawnSmokePoof(prevX, prevY);
+                    spawnSmokePoof(prevX, prevY, 2);
                     this.x = targetX;
                     this.y = targetY;
                     this.spinAngle = Math.atan2(other.y - this.y, other.x - this.x);
@@ -2124,6 +2372,20 @@ class Player {
             } else if (this.build === 'gambler') {
                 this.rollGamblerOutcome();
                 this.specialCooldown = this.buildCfg.abilityCooldown;
+            } else if (this.build === 'berserker') {
+                this.berserkerDashAngle = this.spinAngle;
+                this.berserkerDashTime = this.buildCfg.rageDashDuration;
+                this.berserkerRageTime = this.buildCfg.rageDuration;
+                this.specialCooldown = this.buildCfg.abilityCooldown;
+            } else if (this.build === 'netrunner') {
+                const other = this.id === 1 ? p2 : p1;
+                if (other) {
+                    other.takeDamage(this.buildCfg.glitchDamage);
+                    other.netrunnerWobbleTime = NETRUNNER_WOBBLE_DURATION;
+                    spawnImpact(other.x, other.y, '#93c5fd');
+                }
+                this.netrunnerIntangibleTime = this.buildCfg.glitchDuration;
+                this.specialCooldown = this.buildCfg.abilityCooldown;
             }
         }
 
@@ -2137,9 +2399,12 @@ class Player {
         const chargeMult = holdMult * specialMult;
         const buildMoveMult = this.build === 'swordsman'
             ? 1.3
-            : (this.build === 'juggernaut' ? (this.buildCfg.speedMult ?? 1) : 1);
+            : (this.build === 'juggernaut'
+                ? (this.buildCfg.speedMult ?? 1)
+                : (this.build === 'netrunner' ? 1.25 : 1));
         const moveBase = BALL_BASE_SPEED * buildMoveMult;
         let speedMult = 1;
+        if (this.build === 'berserker') speedMult *= 1 + getBerserkerBonusFromHp(this.hp);
         if (this.reaperAbilityTime > 0) speedMult *= 1.3;
         if (this.reaperDebuffTime > 0) speedMult *= this.reaperDebuffSpeedMult;
         if (this.statusSlowTime > 0) speedMult *= this.statusSlowMult;
@@ -2147,6 +2412,13 @@ class Player {
         const speed = (this.isDashing ? moveBase * DASH_MULT : moveBase) * chargeMult * speedMult;
         this.x += this.dirX * speed * dt;
         this.y += this.dirY * speed * dt;
+        if (this.berserkerDashTime > 0) {
+            const dashX = Math.cos(this.berserkerDashAngle);
+            const dashY = Math.sin(this.berserkerDashAngle);
+            this.x += dashX * this.buildCfg.rageDashSpeed * dt;
+            this.y += dashY * this.buildCfg.rageDashSpeed * dt;
+            this.spinAngle = this.berserkerDashAngle;
+        }
 
         if (this.build === 'juggernaut' && this.juggernautPullTime > 0) {
             const other = this.id === 1 ? p2 : p1;
@@ -2582,6 +2854,82 @@ class Player {
         this.gamblerTripleShotReady = false;
     }
 
+    startBerserkerAttack() {
+        const rageActive = this.berserkerRageTime > 0;
+        const sequenceSpeed = rageActive ? this.buildCfg.rageSequenceSpeedMult : 1;
+        const secondSlashDelay = this.buildCfg.secondSlashDelay / sequenceSpeed;
+        this.berserkerAttackBaseAngle = this.spinAngle;
+        this.berserkerAttackDamageMult = this.nextAttackDamageMult;
+        this.nextAttackDamageMult = 1.0;
+        this.berserkerAttackTime = BERSERKER_SLASH_FX_DURATION + secondSlashDelay;
+        this.berserkerSecondSlashTimer = secondSlashDelay;
+        this.berserkerPendingSecondSlash = true;
+        this.performBerserkerSlash(this.berserkerAttackBaseAngle - this.buildCfg.slashHalfAngle * 2, 1);
+        const cooldownMult = rageActive ? this.buildCfg.rageCooldownMult : 1;
+        this.shootCooldown = this.buildCfg.shootCooldown * cooldownMult;
+    }
+
+    performBerserkerSlash(endAngle, slashIndex) {
+        const other = this.id === 1 ? p2 : p1;
+        const rageActive = this.berserkerRageTime > 0;
+        const bonus = getBerserkerDamageBonusFromHp(this.hp);
+        const sweepScale = rageActive ? this.buildCfg.rageConeScale : 1;
+        const sweepAngle = this.buildCfg.slashHalfAngle * 2 * sweepScale;
+        const actualEndAngle = this.berserkerAttackBaseAngle + Math.sign(normalizeAngle(endAngle - this.berserkerAttackBaseAngle) || -1) * sweepAngle;
+        const damage = Math.round(this.buildCfg.slashDamage * (1 + bonus) * this.berserkerAttackDamageMult);
+        const range = this.buildCfg.slashRange;
+        const knockback = this.buildCfg.slashKnockback;
+
+        if (slashIndex === 1) this.berserkerSlash1FxTime = BERSERKER_SLASH_FX_DURATION;
+        else this.berserkerSlash2FxTime = BERSERKER_SLASH_FX_DURATION;
+
+        if (other && !isPlayerIntangible(other) && isTargetInsideSlashSweep(this.x, this.y, this.berserkerAttackBaseAngle, actualEndAngle, range, 0.08, other.x, other.y)) {
+            other.takeDamage(damage);
+            const dx = other.x - this.x;
+            const dy = other.y - this.y;
+            const len = Math.hypot(dx, dy) || 1;
+            other.x += (dx / len) * knockback;
+            other.y += (dy / len) * knockback;
+            screenShake = { x: 0, y: 0, duration: 0.18, intensity: 10 };
+            spawnImpact(other.x, other.y, '#f97316');
+        }
+
+        summons.forEach(summon => {
+            if (!summon.active || summon.ownerId === this.id) return;
+            if (isTargetInsideSlashSweep(this.x, this.y, this.berserkerAttackBaseAngle, actualEndAngle, range, 0.08, summon.x, summon.y, summon.radius)) {
+                summon.hit();
+            }
+        });
+    }
+
+    startNetrunnerBurst() {
+        this.netrunnerBurstTime = this.buildCfg.boltGap;
+        this.netrunnerBoltTimer = this.buildCfg.boltGap;
+        this.netrunnerBoltsRemaining = 1;
+        this.netrunnerBurstGroupId = this.netrunnerBoltPairId++;
+        this.fireNetrunnerBolt(this.netrunnerBurstGroupId, 0);
+    }
+
+    fireNetrunnerBolt(groupId, boltIndex) {
+        const gx = Math.cos(this.spinAngle);
+        const gy = Math.sin(this.spinAngle);
+        const sideX = -gy;
+        const sideY = gx;
+        const sideOffset = boltIndex === 0 ? -6 : 6;
+        const bx = this.x + gx * (BALL_RADIUS + 7) + sideX * sideOffset;
+        const by = this.y + gy * (BALL_RADIUS + 7) + sideY * sideOffset;
+        bullets.push(new Bullet(this.id, bx, by, gx, gy, '#60a5fa', {
+            damage: this.buildCfg.boltDamage,
+            type: 'netbolt',
+            speed: NETRUNNER_BOLT_SPEED,
+            radius: this.buildCfg.boltRadius,
+            maxDistance: ARENA_RADIUS * 1.5,
+            cooldownFreeze: this.buildCfg.boltPauseDuration,
+            linkGroup: groupId,
+            linkIndex: boltIndex,
+        }));
+    }
+
     rollGamblerOutcome() {
         const other = this.id === 1 ? p2 : p1;
         const roll = Math.floor(Math.random() * 5);
@@ -2620,7 +2968,11 @@ class Player {
 
     takeDamage(amount) {
         if (this.build === 'juggernaut' && this.juggernautInvulnTime > 0) return;
-        const effectiveAmount = amount * (this.reaperDebuffTime > 0 ? this.reaperDebuffDamageMult : 1);
+        if (isPlayerIntangible(this)) return;
+        let effectiveAmount = amount * (this.reaperDebuffTime > 0 ? this.reaperDebuffDamageMult : 1);
+        if (this.build === 'berserker' && this.berserkerRageTime > 0) {
+            effectiveAmount *= (1 - this.buildCfg.rageDamageReduction);
+        }
         this.hp = Math.max(0, this.hp - effectiveAmount);
         this.updateUI();
         if (this.hp <= 0 && !gameOver) {
@@ -2651,6 +3003,13 @@ class Player {
 
     draw(ctx) {
         if (this.isEliminated) return;
+        const baseX = this.x;
+        const baseY = this.y;
+        if (this.netrunnerWobbleTime > 0) {
+            const wobbleStrength = 8 * (this.netrunnerWobbleTime / NETRUNNER_WOBBLE_DURATION);
+            this.x += Math.sin(performance.now() * 0.09) * wobbleStrength;
+            this.y += Math.cos(performance.now() * 0.12) * wobbleStrength * 0.7;
+        }
         // Rainbow smear effect if dashing
         if (this.isDashing) {
             // Draw 5 trailing smear frames, fading out and cycling colors
@@ -2684,7 +3043,9 @@ class Player {
         ctx.beginPath();
         ctx.arc(this.x, this.y, BALL_RADIUS, 0, Math.PI * 2);
         ctx.fillStyle = this.color;
+        if (isPlayerIntangible(this)) ctx.globalAlpha = 0.45 + Math.sin(performance.now() * 0.02) * 0.12;
         ctx.fill();
+        ctx.globalAlpha = 1;
 
         ctx.beginPath();
         ctx.arc(this.x, this.y, BALL_RADIUS, 0, Math.PI * 2);
@@ -3321,6 +3682,136 @@ class Player {
             ctx.setLineDash([10, 14]);
             ctx.stroke();
             ctx.setLineDash([]);
+        } else if (this.build === 'berserker') {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.spinAngle + Math.PI / 2);
+            if (berserkerAxesImage.complete && berserkerAxesImage.naturalWidth > 0) {
+                const w = 56;
+                const h = (berserkerAxesImage.naturalHeight / berserkerAxesImage.naturalWidth) * w;
+                ctx.drawImage(berserkerAxesImage, -w / 2, -h / 2, w, h);
+            }
+            ctx.restore();
+
+            const aimLen = 96;
+            ctx.beginPath();
+            ctx.moveTo(this.x + Math.cos(this.spinAngle) * 16, this.y + Math.sin(this.spinAngle) * 16);
+            ctx.lineTo(this.x + Math.cos(this.spinAngle) * aimLen, this.y + Math.sin(this.spinAngle) * aimLen);
+            ctx.strokeStyle = 'rgba(254,215,170,0.5)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 8]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            const drawSlashCone = (fxTime, endAngle) => {
+                if (fxTime <= 0) return;
+                const rageActive = this.berserkerRageTime > 0;
+                const alpha = fxTime / BERSERKER_SLASH_FX_DURATION;
+                const outward = normalizeAngle(endAngle - this.berserkerAttackBaseAngle);
+                const currentEnd = this.berserkerAttackBaseAngle + outward * (1 - alpha * 0.35);
+                const start = this.berserkerAttackBaseAngle;
+                ctx.save();
+                ctx.strokeStyle = `rgba(255,241,242,${0.92 * alpha})`;
+                ctx.lineWidth = 7;
+                ctx.lineCap = 'round';
+                ctx.shadowColor = '#fb7185';
+                ctx.shadowBlur = 14;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.buildCfg.slashRange * 0.42, start, currentEnd, outward < 0);
+                ctx.stroke();
+                ctx.strokeStyle = `rgba(251,113,133,${0.72 * alpha})`;
+                ctx.lineWidth = 13;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.buildCfg.slashRange * 0.68, start, currentEnd, outward < 0);
+                ctx.stroke();
+                ctx.strokeStyle = `rgba(254,202,202,${0.38 * alpha})`;
+                ctx.lineWidth = 18;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.buildCfg.slashRange * 0.92, start, currentEnd, outward < 0);
+                ctx.stroke();
+                ctx.restore();
+            };
+            drawSlashCone(this.berserkerSlash1FxTime, this.berserkerAttackBaseAngle - this.buildCfg.slashHalfAngle * 2);
+            drawSlashCone(this.berserkerSlash2FxTime, this.berserkerAttackBaseAngle + this.buildCfg.slashHalfAngle * 2);
+
+            if (this.berserkerRageTime > 0) {
+                const pulse = 0.75 + Math.sin(performance.now() * 0.018) * 0.25;
+                for (let i = 0; i < 3; i++) {
+                    ctx.save();
+                    ctx.strokeStyle = `rgba(239,68,68,${0.22 + i * 0.12})`;
+                    ctx.lineWidth = 5 - i;
+                    ctx.shadowColor = '#ef4444';
+                    ctx.shadowBlur = 12 + i * 4;
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, BALL_RADIUS + 10 + i * 7 + pulse * 4, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            }
+        } else if (this.build === 'netrunner') {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.spinAngle + Math.PI / 2);
+            ctx.translate(5, 0);
+            ctx.scale(1.38, 1.38);
+            ctx.fillStyle = 'rgba(34,211,238,0.55)';
+            ctx.strokeStyle = 'rgba(125,211,252,0.98)';
+            ctx.lineWidth = 1.7;
+            roundRectPath(ctx, -16, -9, 12, 7, 3);
+            ctx.fill();
+            ctx.stroke();
+            roundRectPath(ctx, -2, -9, 12, 7, 3);
+            ctx.fill();
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(-3, -5.5);
+            ctx.lineTo(-2, -5.5);
+            ctx.strokeStyle = 'rgba(191,219,254,0.88)';
+            ctx.lineWidth = 1.2;
+            ctx.stroke();
+            ctx.restore();
+
+            const aimLen = ARENA_RADIUS * 1.9;
+            ctx.beginPath();
+            ctx.moveTo(this.x + Math.cos(this.spinAngle) * 16, this.y + Math.sin(this.spinAngle) * 16);
+            ctx.lineTo(this.x + Math.cos(this.spinAngle) * aimLen, this.y + Math.sin(this.spinAngle) * aimLen);
+            ctx.strokeStyle = 'rgba(147,197,253,0.55)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 10]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            if (this.netrunnerIntangibleTime > 0) {
+                for (let i = 0; i < 3; i++) {
+                    const offsetX = Math.sin(performance.now() * 0.028 + i * 2.1) * (4 + i * 2);
+                    const offsetY = Math.cos(performance.now() * 0.024 + i * 1.4) * (3 + i);
+                    ctx.save();
+                    ctx.strokeStyle = `rgba(${i === 1 ? '244,114,182' : '96,165,250'},${0.28 - i * 0.06})`;
+                    ctx.lineWidth = 5 - i;
+                    ctx.beginPath();
+                    ctx.arc(this.x + offsetX, this.y + offsetY, BALL_RADIUS + 2 + i, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+                for (let i = 0; i < 7; i++) {
+                    const offset = i * 0.8 + performance.now() * 0.006;
+                    ctx.save();
+                    ctx.strokeStyle = `rgba(96,165,250,${0.22 + i * 0.05})`;
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(this.x + Math.sin(offset) * 10, this.y + Math.cos(offset * 1.3) * 7, BALL_RADIUS + 6 + i, 0.4, 2.4);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+                for (let i = 0; i < 6; i++) {
+                    const jitterX = this.x - 18 + i * 7 + Math.sin(performance.now() * 0.02 + i) * 4;
+                    const jitterY = this.y - 20 + Math.cos(performance.now() * 0.025 + i * 1.7) * 18;
+                    ctx.save();
+                    ctx.fillStyle = i % 2 === 0 ? 'rgba(96,165,250,0.22)' : 'rgba(244,114,182,0.18)';
+                    ctx.fillRect(jitterX, jitterY, 10, 3);
+                    ctx.restore();
+                }
+            }
         } else if (this.build === 'juggernaut') {
             if (this.juggernautInvulnTime > 0) {
                 ctx.save();
@@ -3449,7 +3940,7 @@ class Player {
                 : (this.swordDamageOverride ?? this.buildCfg.swordDamage);
 
             if (activeAttack && other && this.swordHitLock <= 0) {
-                if (segmentHitsCircle(this.x, this.y, tipX, tipY, other.x, other.y, BALL_RADIUS * 0.92)) {
+                if (!isPlayerIntangible(other) && segmentHitsCircle(this.x, this.y, tipX, tipY, other.x, other.y, BALL_RADIUS * 0.92)) {
                     other.takeDamage(dmg);
                     this.swordHitLock = 0.25;
                     // Knockback and impact shake
@@ -3485,6 +3976,11 @@ class Player {
         }
 
         if (this.build === 'pyro' && this.pyroFiring) {
+            const other = this.id === 1 ? p2 : p1;
+            if (other && isPlayerIntangible(other)) {
+                this.pyroTargetInsideCone = false;
+                this.pyroIgniteTimer = 0;
+            }
             summons.forEach(s => {
                 if (!s.active || s.ownerId === this.id) return;
                 if (isTargetInsideCone(this.x, this.y, this.spinAngle, this.buildCfg.flameRange, this.buildCfg.flameHalfAngle, s.x, s.y, s.radius)) {
@@ -3492,6 +3988,8 @@ class Player {
                 }
             });
         }
+        this.x = baseX;
+        this.y = baseY;
     }
 
     updateUI() {
@@ -3599,6 +4097,9 @@ class Bullet {
         this.returnSpeed = opts.returnSpeed ?? this.speed;
         this.hookedTargetId = opts.hookedTargetId ?? null;
         this.hookHasDamaged = opts.hookHasDamaged || false;
+        this.cooldownFreeze = opts.cooldownFreeze ?? 0;
+        this.linkGroup = opts.linkGroup ?? null;
+        this.linkIndex = opts.linkIndex ?? 0;
         this.active = true;
     }
 
@@ -3769,6 +4270,7 @@ class Bullet {
 
         // Check clone collisions
         summons.forEach(clone => {
+            if (this.type === 'netbolt') return;
             if (!clone.active || clone.ownerId === this.ownerId) return;
             const dist = Math.hypot(this.x - clone.x, this.y - clone.y);
             if (dist <= clone.radius + this.radius) {
@@ -3800,6 +4302,7 @@ class Bullet {
 
             const dist = Math.hypot(this.x - p.x, this.y - p.y);
             if (dist <= BALL_RADIUS + this.radius) {
+                if (isPlayerIntangible(p)) return;
                 if (this.type === 'ninjastar') {
                     const owner = this.ownerId === 1 ? p1 : p2;
                     const target = p;
@@ -3850,6 +4353,14 @@ class Bullet {
                     p.pullTowardStrength = BUILDS.shotgun.hookPullStrength;
                     p.pullTargetId = this.ownerId;
                     this.hookedTargetId = p.id;
+                    return;
+                }
+
+                if (this.type === 'netbolt') {
+                    p.takeDamage(this.damage);
+                    p.cooldownFreezeTime = Math.max(p.cooldownFreezeTime, this.cooldownFreeze);
+                    spawnImpact(this.x, this.y, '#93c5fd');
+                    this.active = false;
                     return;
                 }
 
@@ -4021,6 +4532,22 @@ class Bullet {
             ctx.lineTo(30, -18);
             ctx.moveTo(18, 10);
             ctx.lineTo(30, 18);
+            ctx.stroke();
+        } else if (this.type === 'netbolt') {
+            ctx.fillStyle = '#93c5fd';
+            ctx.beginPath();
+            ctx.moveTo(12, 0);
+            ctx.lineTo(3, -4);
+            ctx.lineTo(6, -1);
+            ctx.lineTo(-4, 5);
+            ctx.lineTo(-1, 1);
+            ctx.lineTo(-10, 0);
+            ctx.lineTo(-1, -6);
+            ctx.lineTo(-4, -2);
+            ctx.closePath();
+            ctx.fill();
+            ctx.strokeStyle = '#eff6ff';
+            ctx.lineWidth = 1;
             ctx.stroke();
         } else if (this.type === 'pyrowave') {
             ctx.fillStyle = '#fb923c';
@@ -4330,7 +4857,7 @@ class TrapLink {
         const enemy = this.ownerId === 1 ? p2 : p1;
         if (!enemy || enemy.isEliminated || this.hitCooldown > 0) return;
 
-        if (segmentHitsCircle(this.x1, this.y1, this.x2, this.y2, enemy.x, enemy.y, BALL_RADIUS)) {
+        if (!isPlayerIntangible(enemy) && segmentHitsCircle(this.x1, this.y1, this.x2, this.y2, enemy.x, enemy.y, BALL_RADIUS)) {
             enemy.takeDamage(TRAPPER_LINK_DAMAGE);
             enemy.statusSlowTime = TRAPPER_LINK_SLOW_DURATION;
             enemy.statusSlowMult = 0;
@@ -4530,11 +5057,11 @@ function spawnImpact(x, y, color) {
     screenShake = { x: 0, y: 0, duration: 0.15, intensity: 13 };
 }
 
-function spawnSmokePoof(x, y) {
-    for (let i = 0; i < 96; i++) {
+function spawnSmokePoof(x, y, scale = 1) {
+    for (let i = 0; i < Math.round(96 * scale * scale); i++) {
         const angle = Math.random() * Math.PI * 2;
-        const speed = 80 + Math.random() * 260;
-        const life = 0.6 + Math.random() * 0.45;
+        const speed = (80 + Math.random() * 260) * scale;
+        const life = 0.6 + Math.random() * 0.45 * scale;
         const smokeColor = Math.random() > 0.45 ? '#94a3b8' : '#cbd5e1';
         particles.push(new Particle(x, y, Math.cos(angle), Math.sin(angle), smokeColor, speed, life));
     }
