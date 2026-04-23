@@ -216,11 +216,11 @@ const BUILDS = {
         name: 'Archer',
         maxHp: 1000,
         shootCooldown: 0.5,
-        chargeStageTime: 1.2,
+        chargeStageTime: 1.3,
         maxStages: 5,
         baseDamagePerStage: 50,
         arrowSpeedMult: 0.7, // 30% slower than gunner bullet
-        abilityCooldown: 30.0,
+        abilityCooldown: 35.0,
         abilityStartsOnCooldown: true,
         abilityDamageMult: 1.5,
         abilityScaleMult: 2.0, // 100% larger
